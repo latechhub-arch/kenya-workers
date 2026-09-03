@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrganizationType {
+  NATIONAL_GOVERNMENT
+  COUNTY_GOVERNMENT
+  MINISTRY
+  DEPARTMENT
+  AGENCY
+  STATE_CORPORATION
+  OTHER
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PersonStatus {
+  ACTIVE
+  INACTIVE
+  DECEASED
+}
+
+enum EmploymentType {
+  PERMANENT
+  PENSIONABLE
+  CONTRACT
+  TEMPORARY
+  CASUAL
+  INTERNSHIP
+  ATTACHMENT
+  SECONDMENT
+  OTHER
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  SUSPENDED
+  ON_LEAVE
+  ENDED
+  RETIRED
+  TERMINATED
+  RESIGNED
+  DISMISSED
+  DECEASED
+}
+
+model Organization {
+  id        String             @id @default(uuid()) @db.Uuid
+  code      String             @unique @db.VarChar(50)
+  name      String             @db.VarChar(255)
+  type      OrganizationType
+  status    OrganizationStatus @default(ACTIVE)
+
+  parentId  String?            @db.Uuid
+  parent    Organization?      @relation("OrganizationHierarchy", fields: [parentId], references: [id])
+  children  Organization[]     @relation("OrganizationHierarchy")
+
+  departments Department[]
+  stations    Station[]
+  employments Employment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([type])
+  @@index([status])
+  @@map("organizations")
+}
+
+model Department {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+
+  code           String       @db.VarChar(50)
+  name           String       @db.VarChar(255)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  stations     Station[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("departments")
+}
+
+model Station {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  departmentId   String?      @db.Uuid
+
+  code           String       @db.VarChar(50)
+  name           String       @db.VarChar(255)
+
+  latitude       Decimal?     @db.Decimal(10, 7)
+  longitude      Decimal?     @db.Decimal(10, 7)
+  geofenceRadius Decimal?     @db.Decimal(10, 2)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  department   Department?  @relation(fields: [departmentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([departmentId])
+  @@map("stations")
+}
+
+model Person {
+  id             String       @id @default(uuid()) @db.Uuid
+  personNumber   String       @unique @db.VarChar(50)
+
+  firstName      String       @db.VarChar(100)
+  middleName     String?      @db.VarChar(100)
+  lastName       String       @db.VarChar(100)
+
+  dateOfBirth    DateTime?    @db.Date
+
+  nationalIdHash String?      @unique @db.VarChar(128)
+  kraPinHash     String?      @unique @db.VarChar(128)
+
+  status         PersonStatus @default(ACTIVE)
+
+  employments    Employment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lastName, firstName])
+  @@index([status])
+  @@map("persons")
+}
+
+model Employment {
+  id             String           @id @default(uuid()) @db.Uuid
+  employmentNumber String         @unique @db.VarChar(50)
+
+  personId       String           @db.Uuid
+  organizationId String           @db.Uuid
+
+  employmentType EmploymentType
+  status         EmploymentStatus @default(ACTIVE)
+
+  appointmentDate DateTime?       @db.Date
+  startDate       DateTime        @db.Date
+  endDate         DateTime?       @db.Date
+
+  person          Person          @relation(fields: [personId], references: [id])
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([personId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([employmentType])
+  @@index([startDate])
+  @@map("employments")
+}
