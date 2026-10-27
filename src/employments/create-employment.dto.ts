@@ -19,6 +19,14 @@ export class CreateEmploymentDto {
   @IsUUID()
   organizationId!: string;
 
+  @IsOptional()
+  @IsUUID()
+  departmentId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  stationId?: string;
+
   @IsEnum(EmploymentType)
   employmentType!: EmploymentType;
 

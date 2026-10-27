@@ -1,18 +1,23 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrganizationDto } from './create-organization.dto';
 import { UpdateOrganizationStatusDto } from './update-organization-status.dto';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { assertOrganizationPermission, organizationIdsForPermission } from '../auth/organization-access';
 
 @Injectable()
 export class OrganizationsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
+  async findAll(user: AuthenticatedUser) {
+    const organizationIds = organizationIdsForPermission(user, 'organizations.read');
     return this.prisma.organization.findMany({
+      where: organizationIds ? { id: { in: organizationIds } } : undefined,
       orderBy: {
         name: 'asc',
       },
@@ -29,7 +34,7 @@ export class OrganizationsService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user: AuthenticatedUser) {
     const organization = await this.prisma.organization.findUnique({
       where: { id },
       select: {
@@ -68,12 +73,17 @@ export class OrganizationsService {
     if (!organization) {
       throw new NotFoundException('Organization not found');
     }
+    assertOrganizationPermission(user, id, 'organizations.read');
 
     return organization;
   }
 
-  async create(dto: CreateOrganizationDto) {
+  async create(dto: CreateOrganizationDto, user: AuthenticatedUser) {
+    if (!dto.parentId && !user.globalPermissionCodes.includes('organizations.create')) {
+      throw new ForbiddenException('Scoped users must create organizations under an assigned organization');
+    }
     if (dto.parentId) {
+      assertOrganizationPermission(user, dto.parentId, 'organizations.create');
       const parent = await this.prisma.organization.findUnique({
         where: {
           id: dto.parentId,
@@ -94,11 +104,6 @@ export class OrganizationsService {
         );
       }
 
-      if (parent.id === dto.parentId) {
-        throw new ConflictException(
-          'An organization cannot be its own parent',
-        );
-      }
     }
 
     try {
@@ -134,6 +139,7 @@ export class OrganizationsService {
   async updateStatus(
     id: string,
     dto: UpdateOrganizationStatusDto,
+    user: AuthenticatedUser,
   ) {
     const organization = await this.prisma.organization.findUnique({
       where: { id },
@@ -145,6 +151,7 @@ export class OrganizationsService {
     if (!organization) {
       throw new NotFoundException('Organization not found');
     }
+    assertOrganizationPermission(user, id, 'organizations.status.update');
 
     return this.prisma.organization.update({
       where: {

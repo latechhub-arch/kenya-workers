@@ -4,9 +4,14 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  IsUUID,
 } from 'class-validator';
 
 export class CreatePersonDto {
+  @IsOptional()
+  @IsUUID()
+  organizationId?: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(50)

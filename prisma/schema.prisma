@@ -51,20 +51,114 @@ enum EmploymentStatus {
   DECEASED
 }
 
+enum JobFrameworkType {
+  MILITARY_RANK
+  POLICE_RANK
+  CIVIL_SERVICE_GRADE
+  OTHER
+}
+
+model User {
+  id           String  @id @default(uuid()) @db.Uuid
+  email        String  @unique @db.VarChar(320)
+  fullName     String  @db.VarChar(255)
+  passwordHash String  @db.VarChar(255)
+  isActive     Boolean @default(true)
+
+  roleAssignments UserRole[]
+  sessions        AuthSession[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  code        String  @unique @db.VarChar(50)
+  name        String  @db.VarChar(255)
+  description String? @db.VarChar(1000)
+
+  userAssignments UserRole[]
+  permissions     RolePermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(uuid()) @db.Uuid
+  code        String @unique @db.VarChar(100)
+  description String @db.VarChar(255)
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id             String  @id @default(uuid()) @db.Uuid
+  userId         String  @db.Uuid
+  roleId         String  @db.Uuid
+  organizationId String? @db.Uuid
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId, organizationId])
+  @@index([organizationId])
+  @@map("user_roles")
+}
+
+model AuthSession {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@map("auth_sessions")
+}
+
 model Organization {
-  id        String             @id @default(uuid()) @db.Uuid
-  code      String             @unique @db.VarChar(50)
-  name      String             @db.VarChar(255)
-  type      OrganizationType
-  status    OrganizationStatus @default(ACTIVE)
+  id     String             @id @default(uuid()) @db.Uuid
+  code   String             @unique @db.VarChar(50)
+  name   String             @db.VarChar(255)
+  type   OrganizationType
+  status OrganizationStatus @default(ACTIVE)
 
-  parentId  String?            @db.Uuid
-  parent    Organization?      @relation("OrganizationHierarchy", fields: [parentId], references: [id])
-  children  Organization[]     @relation("OrganizationHierarchy")
+  parentId String?        @db.Uuid
+  parent   Organization?  @relation("OrganizationHierarchy", fields: [parentId], references: [id])
+  children Organization[] @relation("OrganizationHierarchy")
 
-  departments Department[]
-  stations    Station[]
-  employments Employment[]
+  departments         Department[]
+  stations            Station[]
+  employments         Employment[]
+  postings            EmploymentPosting[]
+  jobFrameworks       JobFramework[]
+  positions           JobPosition[]
+  userRoleAssignments UserRole[]
+  personScopes        PersonOrganizationScope[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -76,14 +170,17 @@ model Organization {
 }
 
 model Department {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
 
-  code           String       @db.VarChar(50)
-  name           String       @db.VarChar(255)
+  code String @db.VarChar(50)
+  name String @db.VarChar(255)
 
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization Organization        @relation(fields: [organizationId], references: [id])
   stations     Station[]
+  employments  Employment[]
+  postings     EmploymentPosting[]
+  positions    JobPosition[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -94,19 +191,21 @@ model Department {
 }
 
 model Station {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
-  departmentId   String?      @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  departmentId   String? @db.Uuid
 
-  code           String       @db.VarChar(50)
-  name           String       @db.VarChar(255)
+  code String @db.VarChar(50)
+  name String @db.VarChar(255)
 
-  latitude       Decimal?     @db.Decimal(10, 7)
-  longitude      Decimal?     @db.Decimal(10, 7)
-  geofenceRadius Decimal?     @db.Decimal(10, 2)
+  latitude       Decimal? @db.Decimal(10, 7)
+  longitude      Decimal? @db.Decimal(10, 7)
+  geofenceRadius Decimal? @db.Decimal(10, 2)
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  department   Department?  @relation(fields: [departmentId], references: [id])
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  department   Department?         @relation(fields: [departmentId], references: [id])
+  employments  Employment[]
+  postings     EmploymentPosting[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -117,22 +216,88 @@ model Station {
   @@map("stations")
 }
 
+// Classification systems are scoped to an organization so military ranks,
+// police ranks, and civil-service grades can evolve independently.
+model JobFramework {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  code           String           @db.VarChar(50)
+  name           String           @db.VarChar(255)
+  type           JobFrameworkType
+  description    String?          @db.VarChar(1000)
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  levels       JobLevel[]
+  positions    JobPosition[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId, type])
+  @@map("job_frameworks")
+}
+
+model JobLevel {
+  id          String @id @default(uuid()) @db.Uuid
+  frameworkId String @db.Uuid
+  code        String @db.VarChar(50)
+  title       String @db.VarChar(255)
+  levelOrder  Int
+
+  framework JobFramework  @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  positions JobPosition[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([frameworkId, code])
+  @@unique([frameworkId, levelOrder])
+  @@map("job_levels")
+}
+
+model JobPosition {
+  id              String  @id @default(uuid()) @db.Uuid
+  organizationId  String  @db.Uuid
+  departmentId    String? @db.Uuid
+  frameworkId     String  @db.Uuid
+  levelId         String  @db.Uuid
+  code            String  @db.VarChar(50)
+  title           String  @db.VarChar(255)
+  authorizedSlots Int
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  framework    JobFramework @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  level        JobLevel     @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  assignments  EmploymentPositionAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([departmentId])
+  @@index([frameworkId, levelId])
+  @@map("job_positions")
+}
+
 model Person {
-  id             String       @id @default(uuid()) @db.Uuid
-  personNumber   String       @unique @db.VarChar(50)
+  id           String @id @default(uuid()) @db.Uuid
+  personNumber String @unique @db.VarChar(50)
 
-  firstName      String       @db.VarChar(100)
-  middleName     String?      @db.VarChar(100)
-  lastName       String       @db.VarChar(100)
+  firstName  String  @db.VarChar(100)
+  middleName String? @db.VarChar(100)
+  lastName   String  @db.VarChar(100)
 
-  dateOfBirth    DateTime?    @db.Date
+  dateOfBirth DateTime? @db.Date
 
-  nationalIdHash String?      @unique @db.VarChar(128)
-  kraPinHash     String?      @unique @db.VarChar(128)
+  nationalIdHash String? @unique @db.VarChar(128)
+  kraPinHash     String? @unique @db.VarChar(128)
 
-  status         PersonStatus @default(ACTIVE)
+  status PersonStatus @default(ACTIVE)
 
-  employments    Employment[]
+  employments        Employment[]
+  organizationScopes PersonOrganizationScope[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -142,30 +307,95 @@ model Person {
   @@map("persons")
 }
 
-model Employment {
-  id             String           @id @default(uuid()) @db.Uuid
-  employmentNumber String         @unique @db.VarChar(50)
+model PersonOrganizationScope {
+  personId       String @db.Uuid
+  organizationId String @db.Uuid
 
-  personId       String           @db.Uuid
-  organizationId String           @db.Uuid
+  person       Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([personId, organizationId])
+  @@map("person_organization_scopes")
+}
+
+model Employment {
+  id               String @id @default(uuid()) @db.Uuid
+  employmentNumber String @unique @db.VarChar(50)
+
+  personId       String  @db.Uuid
+  organizationId String  @db.Uuid
+  departmentId   String? @db.Uuid
+  stationId      String? @db.Uuid
 
   employmentType EmploymentType
   status         EmploymentStatus @default(ACTIVE)
 
-  appointmentDate DateTime?       @db.Date
-  startDate       DateTime        @db.Date
-  endDate         DateTime?       @db.Date
+  appointmentDate DateTime? @db.Date
+  startDate       DateTime  @db.Date
+  endDate         DateTime? @db.Date
 
-  person          Person          @relation(fields: [personId], references: [id])
-  organization    Organization    @relation(fields: [organizationId], references: [id])
+  person       Person              @relation(fields: [personId], references: [id])
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  department   Department?         @relation(fields: [departmentId], references: [id])
+  station      Station?            @relation(fields: [stationId], references: [id])
+  postings     EmploymentPosting[]
+  positionAssignments EmploymentPositionAssignment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([personId])
   @@index([organizationId])
+  @@index([departmentId])
+  @@index([stationId])
   @@index([status])
   @@index([employmentType])
   @@index([startDate])
   @@map("employments")
+}
+
+model EmploymentPositionAssignment {
+  id           String @id @default(uuid()) @db.Uuid
+  employmentId String @db.Uuid
+  positionId   String @db.Uuid
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  reason        String    @db.VarChar(500)
+
+  employment Employment  @relation(fields: [employmentId], references: [id], onDelete: Restrict)
+  position   JobPosition @relation(fields: [positionId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employmentId, effectiveFrom])
+  @@index([positionId, effectiveTo])
+  @@map("employment_position_assignments")
+}
+
+model EmploymentPosting {
+  id             String  @id @default(uuid()) @db.Uuid
+  employmentId   String  @db.Uuid
+  organizationId String  @db.Uuid
+  departmentId   String? @db.Uuid
+  stationId      String? @db.Uuid
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  reason        String    @db.VarChar(500)
+
+  employment   Employment   @relation(fields: [employmentId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  station      Station?     @relation(fields: [stationId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employmentId, effectiveFrom])
+  @@index([organizationId])
+  @@index([departmentId])
+  @@index([stationId])
+  @@map("employment_postings")
 }

@@ -5,13 +5,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDepartmentDto } from './create-department.dto';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { assertOrganizationPermission, organizationIdsForPermission } from '../auth/organization-access';
 
 @Injectable()
 export class DepartmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll() {
+  async findAll(user: AuthenticatedUser) {
+    const organizationIds = organizationIdsForPermission(user, 'departments.read');
     return this.prisma.department.findMany({
+      where: organizationIds ? { organizationId: { in: organizationIds } } : undefined,
       orderBy: {
         name: 'asc',
       },
@@ -28,7 +32,7 @@ export class DepartmentsService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user: AuthenticatedUser) {
     const department = await this.prisma.department.findUnique({
       where: { id },
       include: {
@@ -47,11 +51,13 @@ export class DepartmentsService {
     if (!department) {
       throw new NotFoundException('Department not found');
     }
+    assertOrganizationPermission(user, department.organizationId, 'departments.read');
 
     return department;
   }
 
-  async create(dto: CreateDepartmentDto) {
+  async create(dto: CreateDepartmentDto, user: AuthenticatedUser) {
+    assertOrganizationPermission(user, dto.organizationId, 'departments.create');
     const organization = await this.prisma.organization.findUnique({
       where: {
         id: dto.organizationId,
