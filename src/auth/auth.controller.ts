@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CreateBootstrapDto } from './create-bootstrap.dto';
+import { CreateEmployeeAccountInviteDto } from './create-employee-account-invite.dto';
 import { CreateUserDto } from './create-user.dto';
 import { LoginDto } from './login.dto';
 import { PermissionsGuard } from './permissions.guard';
@@ -18,6 +19,7 @@ import { RequirePermissions } from './require-permissions.decorator';
 import { SessionAuthGuard } from './session-auth.guard';
 import { UpdateUserRolesDto } from './update-user-roles.dto';
 import { UpdateUserStatusDto } from './update-user-status.dto';
+import { RegisterEmployeeAccountDto } from './register-employee-account.dto';
 import type { AuthenticatedRequest } from './auth.types';
 
 @Controller('auth')
@@ -34,10 +36,31 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Post('employee-accounts/register')
+  registerEmployeeAccount(@Body() dto: RegisterEmployeeAccountDto) {
+    return this.authService.registerEmployeeAccount(dto);
+  }
+
+  @UseGuards(SessionAuthGuard, PermissionsGuard)
+  @RequirePermissions('employeeAccounts.invite')
+  @Post('employee-account-invites')
+  createEmployeeAccountInvite(
+    @Body() dto: CreateEmployeeAccountInviteDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.authService.createEmployeeAccountInvite(dto, request.user);
+  }
+
   @UseGuards(SessionAuthGuard)
   @Get('me')
   me(@Req() request: AuthenticatedRequest) {
     return this.authService.currentUser(request.user);
+  }
+
+  @UseGuards(SessionAuthGuard)
+  @Get('me/employee')
+  employeePortal(@Req() request: AuthenticatedRequest) {
+    return this.authService.employeePortal(request.user);
   }
 
   @UseGuards(SessionAuthGuard)

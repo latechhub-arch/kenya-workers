@@ -90,6 +90,7 @@ export class SessionAuthGuard implements CanActivate {
     Object.values(organizationPermissions).flat().forEach((code) => allPermissions.add(code));
     request.user = {
       id: session.user.id,
+      personId: session.user.personId,
       email: session.user.email,
       fullName: session.user.fullName,
       sessionId: session.id,

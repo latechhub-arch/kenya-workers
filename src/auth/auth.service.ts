@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -17,6 +18,8 @@ import { CreateUserDto } from './create-user.dto';
 import { LoginDto } from './login.dto';
 import { UpdateUserRolesDto } from './update-user-roles.dto';
 import { UpdateUserStatusDto } from './update-user-status.dto';
+import { CreateEmployeeAccountInviteDto } from './create-employee-account-invite.dto';
+import { RegisterEmployeeAccountDto } from './register-employee-account.dto';
 import { RoleAssignmentDto } from './role-assignment.dto';
 import { hashPassword, verifyPassword } from './password.util';
 import { AuthenticatedUser } from './auth.types';
@@ -125,6 +128,277 @@ export class AuthService implements OnModuleInit {
       expiresAt,
       user: { id: user.id, email: user.email, fullName: user.fullName },
     };
+  }
+
+  async createEmployeeAccountInvite(
+    dto: CreateEmployeeAccountInviteDto,
+    user: AuthenticatedUser,
+  ) {
+    const person = await this.prisma.person.findUnique({
+      where: { id: dto.personId },
+      select: {
+        id: true,
+        personNumber: true,
+        firstName: true,
+        middleName: true,
+        lastName: true,
+        status: true,
+        userAccount: { select: { id: true } },
+        employments: {
+          where: { status: 'ACTIVE' },
+          select: { organizationId: true },
+        },
+      },
+    });
+
+    if (!person) throw new NotFoundException('Person not found');
+    if (person.status !== 'ACTIVE' || !person.employments.length) {
+      throw new ConflictException(
+        'An employee account can only be invited for an active employee',
+      );
+    }
+    if (person.userAccount) {
+      throw new ConflictException('This employee already has a portal account');
+    }
+    for (const employment of person.employments) {
+      const granted =
+        user.globalPermissionCodes.includes('employeeAccounts.invite') ||
+        user.organizationPermissions[employment.organizationId]?.includes(
+          'employeeAccounts.invite',
+        );
+      if (!granted) {
+        throw new ForbiddenException(
+          'You do not have access to invite this employee',
+        );
+      }
+    }
+
+    const activationToken = randomBytes(32).toString('base64url');
+    const tokenHash = this.hashToken(activationToken);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 72 * 60 * 60 * 1000);
+
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      await tx.employeeAccountInvite.updateMany({
+        where: { personId: person.id, usedAt: null },
+        data: { usedAt: now },
+      });
+      return tx.employeeAccountInvite.create({
+        data: {
+          personId: person.id,
+          tokenHash,
+          expiresAt,
+          createdByUserId: user.id,
+        },
+        select: { id: true, expiresAt: true },
+      });
+    });
+
+    return {
+      id: invitation.id,
+      personNumber: person.personNumber,
+      employeeName: [person.firstName, person.middleName, person.lastName]
+        .filter(Boolean)
+        .join(' '),
+      activationToken,
+      expiresAt: invitation.expiresAt,
+    };
+  }
+
+  async registerEmployeeAccount(dto: RegisterEmployeeAccountDto) {
+    const tokenHash = this.hashToken(dto.activationToken);
+    const now = new Date();
+    const email = dto.email.trim().toLowerCase();
+    const passwordHash = await hashPassword(dto.password);
+    const accessToken = randomBytes(32).toString('base64url');
+    const sessionTokenHash = this.hashToken(accessToken);
+    const sessionExpiresAt = new Date(
+      now.getTime() + AUTH_SESSION_HOURS * 60 * 60 * 1000,
+    );
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const invitation = await tx.employeeAccountInvite.findUnique({
+            where: { tokenHash },
+            include: {
+              person: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  middleName: true,
+                  lastName: true,
+                  status: true,
+                  userAccount: { select: { id: true } },
+                },
+              },
+            },
+          });
+
+          if (
+            !invitation ||
+            invitation.usedAt ||
+            invitation.expiresAt <= now ||
+            invitation.person.status !== 'ACTIVE' ||
+            invitation.person.userAccount
+          ) {
+            throw new UnauthorizedException(
+              'This activation link is invalid, expired, or already used',
+            );
+          }
+
+          const claimed = await tx.employeeAccountInvite.updateMany({
+            where: {
+              id: invitation.id,
+              usedAt: null,
+              expiresAt: { gt: now },
+            },
+            data: { usedAt: now },
+          });
+          if (claimed.count !== 1) {
+            throw new UnauthorizedException(
+              'This activation link is invalid, expired, or already used',
+            );
+          }
+
+          const fullName = [
+            invitation.person.firstName,
+            invitation.person.middleName,
+            invitation.person.lastName,
+          ]
+            .filter(Boolean)
+            .join(' ');
+          const account = await tx.user.create({
+            data: {
+              personId: invitation.person.id,
+              email,
+              fullName,
+              passwordHash,
+            },
+            select: { id: true, email: true, fullName: true, personId: true },
+          });
+
+          await tx.authSession.create({
+            data: {
+              userId: account.id,
+              tokenHash: sessionTokenHash,
+              expiresAt: sessionExpiresAt,
+            },
+          });
+
+          return {
+            accessToken,
+            tokenType: 'Bearer',
+            expiresAt: sessionExpiresAt,
+            user: {
+              id: account.id,
+              email: account.email,
+              fullName: account.fullName,
+              employeeAccount: true,
+            },
+          };
+        },
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new ConflictException(
+          'An account with this email already exists or this employee already has an account',
+        );
+      }
+      if (error?.code === 'P2034') {
+        throw new ConflictException(
+          'This activation link was used at the same time; request a new link if needed',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async employeePortal(user: AuthenticatedUser) {
+    if (!user.personId) {
+      throw new ForbiddenException('This account is not linked to an employee record');
+    }
+
+    const person = await this.prisma.person.findUnique({
+      where: { id: user.personId },
+      select: {
+        id: true,
+        personNumber: true,
+        firstName: true,
+        middleName: true,
+        lastName: true,
+        dateOfBirth: true,
+        status: true,
+        employments: {
+          orderBy: { startDate: 'desc' },
+          include: {
+            organization: {
+              select: { id: true, code: true, name: true, type: true },
+            },
+            department: { select: { id: true, code: true, name: true } },
+            station: { select: { id: true, code: true, name: true } },
+            positionAssignments: {
+              orderBy: { effectiveFrom: 'desc' },
+              include: {
+                position: {
+                  include: {
+                    framework: {
+                      select: { id: true, code: true, name: true, type: true },
+                    },
+                    level: {
+                      select: {
+                        id: true,
+                        code: true,
+                        title: true,
+                        levelOrder: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            postings: {
+              orderBy: { effectiveFrom: 'desc' },
+              include: {
+                organization: { select: { id: true, code: true, name: true } },
+                department: { select: { id: true, code: true, name: true } },
+                station: { select: { id: true, code: true, name: true } },
+              },
+            },
+            compensationAssignments: {
+              orderBy: { effectiveFrom: 'desc' },
+              include: {
+                compensationStep: {
+                  include: {
+                    jobLevel: {
+                      select: {
+                        id: true,
+                        code: true,
+                        title: true,
+                        levelOrder: true,
+                      },
+                    },
+                    compensationScale: {
+                      select: {
+                        id: true,
+                        code: true,
+                        name: true,
+                        currency: true,
+                        isProvisional: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!person) throw new NotFoundException('Employee record not found');
+    return { person, email: user.email };
   }
 
   async createUser(dto: CreateUserDto) {
@@ -357,6 +631,7 @@ export class AuthService implements OnModuleInit {
       roles: user.roleCodes,
       permissions: user.permissionCodes,
       organizations: user.organizationIds,
+      employeeAccount: Boolean(user.personId),
     };
   }
 

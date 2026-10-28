@@ -2,6 +2,7 @@ import { Request } from 'express';
 
 export interface AuthenticatedUser {
   id: string;
+  personId: string | null;
   email: string;
   fullName: string;
   roleCodes: string[];

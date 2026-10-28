@@ -35,4 +35,16 @@ export class CreatePersonDto {
   @IsOptional()
   @IsDateString()
   dateOfBirth?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  nationalId?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  kraPin?: string;
 }

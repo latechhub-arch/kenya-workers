@@ -31,6 +31,30 @@
 $ yarn install
 ```
 
+## Staff records interface
+
+The API serves the browser interface from the `public` directory. Start the API from this directory with `npm run start:dev`, then open [http://localhost:3000](http://localhost:3000). Sign in with an account created through the system bootstrap or user-management flow.
+
+The first version includes staff search, employment details, position and posting history, and permission-aware compensation history. The session token is kept in the current browser tab and cleared when you sign out.
+
+HR administrators and officers can issue a one-time employee activation link from a staff record. Share the link through an approved channel; it expires after 72 hours. Employees create their own login with the link, email, and password. Employee accounts are linked to one person record and receive access only to that employee's self-service page.
+
+## Employee Android app and attendance
+
+The Android app packages the employee portal with Capacitor and requests foreground location only after the employee taps **Use GPS and mark present**. It stores one check-in per active employment per Kenya calendar day. The API checks the assigned station's configured geofence and requires the GPS uncertainty circle to fit inside the station radius. Location coordinates and accuracy are retained with the attendance record for audit purposes. The app does not track employees in the background.
+
+GPS/device coordinates can be spoofed on modified devices; a geofence is a location plausibility check, not cryptographic proof of presence. Add managed-device or platform attestation controls if a stronger anti-fraud guarantee is required.
+
+To build a debug APK, install Android Studio with its Android SDK and set up its JDK. Deploy the API over HTTPS, then configure its URL and CORS allowlist before building:
+
+```powershell
+$env:VITE_API_BASE_URL = "https://your-api-host"
+$env:CORS_ORIGINS = "https://localhost"
+npm run mobile:apk
+```
+
+The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. The API URL is embedded in the app at build time. Do not use a development-only or local-computer URL for employee distribution.
+
 ## Compile and run the project
 
 ```bash

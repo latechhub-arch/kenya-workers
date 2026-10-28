@@ -27,6 +27,13 @@ export const PERMISSIONS = [
   'users.read',
   'users.create',
   'users.manage',
+  'employeeAccounts.invite',
+  'audit.read',
+  'compensation.read',
+  'compensation.create',
+  'compensation.update',
+  'employmentCompensation.read',
+  'employmentCompensation.assign',
 ] as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[number];
@@ -43,11 +50,15 @@ export const ROLE_DEFINITIONS: Record<
   HR_ADMIN: {
     name: 'HR Administrator',
     description: 'Manage workforce records within assigned organizations.',
-    permissions: PERMISSIONS.filter((permission) => !permission.startsWith('users.')),
+    permissions: PERMISSIONS.filter(
+      (permission) =>
+        !permission.startsWith('users.') && permission !== 'audit.read',
+    ),
   },
   HR_OFFICER: {
     name: 'HR Officer',
-    description: 'Create and read workforce records within assigned organizations.',
+    description:
+      'Create and read workforce records within assigned organizations.',
     permissions: [
       'organizations.read',
       'departments.read',
@@ -63,13 +74,16 @@ export const ROLE_DEFINITIONS: Record<
       'positions.read',
       'employmentPositions.read',
       'employmentPositions.assign',
+      'employmentCompensation.read',
+      'employeeAccounts.invite',
     ],
   },
   AUDITOR: {
     name: 'Auditor',
     description: 'Read-only access to workforce and organizational records.',
     permissions: PERMISSIONS.filter(
-      (permission) => permission.endsWith('.read') && permission !== 'users.read',
+      (permission) =>
+        permission.endsWith('.read') && permission !== 'users.read',
     ),
   },
 };

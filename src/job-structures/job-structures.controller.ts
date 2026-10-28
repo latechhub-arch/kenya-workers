@@ -14,6 +14,7 @@ import { SessionAuthGuard } from '../auth/session-auth.guard';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { CreateJobFrameworkDto } from './create-job-framework.dto';
 import { CreateJobLevelDto } from './create-job-level.dto';
+import { CreateJobLevelAliasDto } from './create-job-level-alias.dto';
 import { CreateJobPositionDto } from './create-job-position.dto';
 import { JobStructuresService } from './job-structures.service';
 
@@ -48,6 +49,22 @@ export class JobStructuresController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.jobStructuresService.createLevel(id, dto, request.user);
+  }
+
+  @Post('job-frameworks/:frameworkId/levels/:levelId/aliases')
+  @RequirePermissions('jobLevels.create')
+  createLevelAlias(
+    @Param('frameworkId', new ParseUUIDPipe()) frameworkId: string,
+    @Param('levelId', new ParseUUIDPipe()) levelId: string,
+    @Body() dto: CreateJobLevelAliasDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.jobStructuresService.createLevelAlias(
+      frameworkId,
+      levelId,
+      dto,
+      request.user,
+    );
   }
 
   @Get('positions')

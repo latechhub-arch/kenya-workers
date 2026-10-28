@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -8,10 +9,14 @@ import { EmploymentStatus, EmploymentType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmploymentDto } from './create-employment.dto';
 import { CreateEmploymentPositionAssignmentDto } from './create-employment-position-assignment.dto';
+import { CreateEmploymentCompensationAssignmentDto } from './create-employment-compensation-assignment.dto';
 import { CreateEmploymentPostingDto } from './create-employment-posting.dto';
 import { UpdateEmploymentStatusDto } from './update-employment-status.dto';
 import { AuthenticatedUser } from '../auth/auth.types';
-import { assertOrganizationPermission, organizationIdsForPermission } from '../auth/organization-access';
+import {
+  assertOrganizationPermission,
+  organizationIdsForPermission,
+} from '../auth/organization-access';
 
 @Injectable()
 export class EmploymentsService {
@@ -83,11 +88,16 @@ export class EmploymentsService {
 
   async findAll(user: AuthenticatedUser) {
     await this.applyDuePostings();
-    const organizationIds = organizationIdsForPermission(user, 'employments.read');
+    const organizationIds = organizationIdsForPermission(
+      user,
+      'employments.read',
+    );
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     return this.prisma.employment.findMany({
-      where: organizationIds ? { organizationId: { in: organizationIds } } : undefined,
+      where: organizationIds
+        ? { organizationId: { in: organizationIds } }
+        : undefined,
       orderBy: {
         createdAt: 'desc',
       },
@@ -147,8 +157,17 @@ export class EmploymentsService {
           include: {
             position: {
               include: {
-                framework: { select: { id: true, code: true, name: true, type: true } },
-                level: { select: { id: true, code: true, title: true, levelOrder: true } },
+                framework: {
+                  select: { id: true, code: true, name: true, type: true },
+                },
+                level: {
+                  select: {
+                    id: true,
+                    code: true,
+                    title: true,
+                    levelOrder: true,
+                  },
+                },
               },
             },
           },
@@ -159,11 +178,17 @@ export class EmploymentsService {
 
   async findOne(id: string, user: AuthenticatedUser) {
     await this.applyDuePostings(id);
-    const organizationIds = organizationIdsForPermission(user, 'employments.read');
+    const organizationIds = organizationIdsForPermission(
+      user,
+      'employments.read',
+    );
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const employment = await this.prisma.employment.findUnique({
-      where: { id, ...(organizationIds ? { organizationId: { in: organizationIds } } : {}) },
+      where: {
+        id,
+        ...(organizationIds ? { organizationId: { in: organizationIds } } : {}),
+      },
       select: {
         id: true,
         employmentNumber: true,
@@ -221,8 +246,17 @@ export class EmploymentsService {
           include: {
             position: {
               include: {
-                framework: { select: { id: true, code: true, name: true, type: true } },
-                level: { select: { id: true, code: true, title: true, levelOrder: true } },
+                framework: {
+                  select: { id: true, code: true, name: true, type: true },
+                },
+                level: {
+                  select: {
+                    id: true,
+                    code: true,
+                    title: true,
+                    levelOrder: true,
+                  },
+                },
               },
             },
           },
@@ -238,7 +272,11 @@ export class EmploymentsService {
   }
 
   async create(dto: CreateEmploymentDto, user: AuthenticatedUser) {
-    assertOrganizationPermission(user, dto.organizationId, 'employments.create');
+    assertOrganizationPermission(
+      user,
+      dto.organizationId,
+      'employments.create',
+    );
     const person = await this.prisma.person.findUnique({
       where: {
         id: dto.personId,
@@ -254,14 +292,19 @@ export class EmploymentsService {
       throw new NotFoundException('Person not found');
     }
 
-    const personOrganizationIds = organizationIdsForPermission(user, 'persons.read');
+    const personOrganizationIds = organizationIdsForPermission(
+      user,
+      'persons.read',
+    );
     if (
       personOrganizationIds &&
       !person.organizationScopes.some(({ organizationId }) =>
         personOrganizationIds.includes(organizationId),
       )
     ) {
-      throw new ForbiddenException('Person is not in an organization you can access');
+      throw new ForbiddenException(
+        'Person is not in an organization you can access',
+      );
     }
 
     const organization = await this.prisma.organization.findUnique({
@@ -299,9 +342,7 @@ export class EmploymentsService {
     }
 
     if (endDate && endDate < startDate) {
-      throw new ConflictException(
-        'End date cannot be earlier than start date',
-      );
+      throw new ConflictException('End date cannot be earlier than start date');
     }
 
     if (appointmentDate && appointmentDate > startDate) {
@@ -319,6 +360,25 @@ export class EmploymentsService {
     if (organization.status !== 'ACTIVE') {
       throw new ConflictException(
         'Employment cannot be created for an inactive organization',
+      );
+    }
+
+    const existingActiveEmployment = await this.prisma.employment.findFirst({
+      where: {
+        personId: dto.personId,
+        status: {
+          in: [
+            EmploymentStatus.ACTIVE,
+            EmploymentStatus.SUSPENDED,
+            EmploymentStatus.ON_LEAVE,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    if (existingActiveEmployment) {
+      throw new ConflictException(
+        'Person already has an active employment record',
       );
     }
 
@@ -381,78 +441,97 @@ export class EmploymentsService {
               organizationId: dto.organizationId,
             },
           },
-          create: { personId: dto.personId, organizationId: dto.organizationId },
+          create: {
+            personId: dto.personId,
+            organizationId: dto.organizationId,
+          },
           update: {},
         });
         return tx.employment.create({
-        data: {
-          employmentNumber: dto.employmentNumber,
-          personId: dto.personId,
-          organizationId: dto.organizationId,
-          departmentId,
-          stationId: dto.stationId,
-          employmentType: dto.employmentType,
-          status: EmploymentStatus.ACTIVE,
-          appointmentDate,
-          startDate,
-          endDate,
-          postings: {
-            create: {
-              organizationId: dto.organizationId,
-              departmentId,
-              stationId: dto.stationId,
-              effectiveFrom: startDate,
-              reason: 'Initial employment assignment',
+          data: {
+            employmentNumber: dto.employmentNumber,
+            personId: dto.personId,
+            organizationId: dto.organizationId,
+            departmentId,
+            stationId: dto.stationId,
+            employmentType: dto.employmentType,
+            status: EmploymentStatus.ACTIVE,
+            appointmentDate,
+            startDate,
+            endDate,
+            postings: {
+              create: {
+                organizationId: dto.organizationId,
+                departmentId,
+                stationId: dto.stationId,
+                effectiveFrom: startDate,
+                reason: 'Initial employment assignment',
+              },
             },
           },
-        },
-        select: {
-          id: true,
-          employmentNumber: true,
-          personId: true,
-          organizationId: true,
-          departmentId: true,
-          stationId: true,
-          employmentType: true,
-          status: true,
-          appointmentDate: true,
-          startDate: true,
-          endDate: true,
-          createdAt: true,
-          updatedAt: true,
-          department: {
-            select: { id: true, code: true, name: true },
-          },
-          station: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              latitude: true,
-              longitude: true,
-              geofenceRadius: true,
+          select: {
+            id: true,
+            employmentNumber: true,
+            personId: true,
+            organizationId: true,
+            departmentId: true,
+            stationId: true,
+            employmentType: true,
+            status: true,
+            appointmentDate: true,
+            startDate: true,
+            endDate: true,
+            createdAt: true,
+            updatedAt: true,
+            department: {
+              select: { id: true, code: true, name: true },
+            },
+            station: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                latitude: true,
+                longitude: true,
+                geofenceRadius: true,
+              },
+            },
+            postings: {
+              orderBy: { effectiveFrom: 'asc' },
+              select: {
+                id: true,
+                organizationId: true,
+                departmentId: true,
+                stationId: true,
+                effectiveFrom: true,
+                effectiveTo: true,
+                reason: true,
+              },
             },
           },
-          postings: {
-            orderBy: { effectiveFrom: 'asc' },
-            select: {
-              id: true,
-              organizationId: true,
-              departmentId: true,
-              stationId: true,
-              effectiveFrom: true,
-              effectiveTo: true,
-              reason: true,
-            },
-          },
-        },
-      });
+        });
       });
     } catch (error: any) {
       if (error?.code === 'P2002') {
-        throw new ConflictException(
-          'Employment number already exists',
-        );
+        const activeEmployment = await this.prisma.employment.findFirst({
+          where: {
+            personId: dto.personId,
+            status: {
+              in: [
+                EmploymentStatus.ACTIVE,
+                EmploymentStatus.SUSPENDED,
+                EmploymentStatus.ON_LEAVE,
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        if (activeEmployment) {
+          throw new ConflictException(
+            'Person already has an active employment record',
+          );
+        }
+        throw new ConflictException('Employment number already exists');
       }
 
       throw error;
@@ -470,7 +549,11 @@ export class EmploymentsService {
     if (!employment) {
       throw new NotFoundException('Employment not found');
     }
-    assertOrganizationPermission(user, employment.organizationId, 'postings.read');
+    assertOrganizationPermission(
+      user,
+      employment.organizationId,
+      'postings.read',
+    );
 
     return this.prisma.employmentPosting.findMany({
       where: {
@@ -508,9 +591,16 @@ export class EmploymentsService {
       select: { id: true, organizationId: true },
     });
     if (!employment) throw new NotFoundException('Employment not found');
-    assertOrganizationPermission(user, employment.organizationId, 'employmentPositions.read');
+    assertOrganizationPermission(
+      user,
+      employment.organizationId,
+      'employmentPositions.read',
+    );
 
-    const organizationIds = organizationIdsForPermission(user, 'employmentPositions.read');
+    const organizationIds = organizationIdsForPermission(
+      user,
+      'employmentPositions.read',
+    );
     return this.prisma.employmentPositionAssignment.findMany({
       where: {
         employmentId,
@@ -524,8 +614,12 @@ export class EmploymentsService {
           include: {
             organization: { select: { id: true, code: true, name: true } },
             department: { select: { id: true, code: true, name: true } },
-            framework: { select: { id: true, code: true, name: true, type: true } },
-            level: { select: { id: true, code: true, title: true, levelOrder: true } },
+            framework: {
+              select: { id: true, code: true, name: true, type: true },
+            },
+            level: {
+              select: { id: true, code: true, title: true, levelOrder: true },
+            },
           },
         },
       },
@@ -543,116 +637,176 @@ export class EmploymentsService {
       throw new ConflictException('Invalid effectiveFrom date');
     }
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const employment = await tx.employment.findUnique({
-          where: { id: employmentId },
-          select: {
-            id: true,
-            organizationId: true,
-            departmentId: true,
-            status: true,
-            startDate: true,
-            endDate: true,
-          },
-        });
-        if (!employment) throw new NotFoundException('Employment not found');
-        assertOrganizationPermission(user, employment.organizationId, 'employmentPositions.assign');
-        if (employment.status !== EmploymentStatus.ACTIVE) {
-          throw new ConflictException('Only active employment can receive a position assignment');
-        }
-        if (effectiveFrom < employment.startDate) {
-          throw new ConflictException('Position assignment cannot predate employment start');
-        }
-        if (employment.endDate && effectiveFrom > employment.endDate) {
-          throw new ConflictException('Position assignment cannot postdate employment end');
-        }
-
-        const postingAtEffectiveDate = await tx.employmentPosting.findFirst({
-          where: { employmentId, effectiveFrom: { lte: effectiveFrom } },
-          orderBy: { effectiveFrom: 'desc' },
-          select: { organizationId: true, departmentId: true },
-        });
-        const organizationIdAtEffectiveDate =
-          postingAtEffectiveDate?.organizationId ?? employment.organizationId;
-        const departmentIdAtEffectiveDate = postingAtEffectiveDate
-          ? postingAtEffectiveDate.departmentId
-          : employment.departmentId;
-
-        const position = await tx.jobPosition.findUnique({
-          where: { id: dto.positionId },
-          include: {
-            organization: { select: { id: true, status: true } },
-            department: { select: { id: true, code: true, name: true } },
-            framework: { select: { id: true, code: true, name: true, type: true } },
-            level: { select: { id: true, code: true, title: true, levelOrder: true } },
-          },
-        });
-        if (!position) throw new NotFoundException('Job position not found');
-        assertOrganizationPermission(user, position.organizationId, 'employmentPositions.assign');
-        if (position.organizationId !== organizationIdAtEffectiveDate) {
-          throw new ConflictException('Job position does not belong to the employment organization');
-        }
-        if (position.organization.status !== 'ACTIVE') {
-          throw new ConflictException('Cannot assign a position in an inactive organization');
-        }
-        if (position.departmentId && position.departmentId !== departmentIdAtEffectiveDate) {
-          throw new ConflictException('Job position does not belong to the employment department');
-        }
-
-        const latest = await tx.employmentPositionAssignment.findFirst({
-          where: { employmentId },
-          orderBy: { effectiveFrom: 'desc' },
-          select: { id: true, positionId: true, effectiveFrom: true, effectiveTo: true },
-        });
-        if (latest && effectiveFrom <= latest.effectiveFrom) {
-          throw new ConflictException('Position assignment date must be later than the latest recorded assignment');
-        }
-        if (latest?.effectiveTo === null && latest.positionId === position.id) {
-          throw new ConflictException('This job position is already assigned to the employment');
-        }
-
-        const occupiedSlots = await tx.employmentPositionAssignment.count({
-          where: {
-            positionId: position.id,
-            effectiveFrom: { lte: effectiveFrom },
-            OR: [{ effectiveTo: null }, { effectiveTo: { gte: effectiveFrom } }],
-          },
-        });
-        if (occupiedSlots >= position.authorizedSlots) {
-          throw new ConflictException('All authorized slots for this job position are occupied');
-        }
-
-        if (latest && latest.effectiveTo === null) {
-          const previousDay = new Date(effectiveFrom);
-          previousDay.setUTCDate(previousDay.getUTCDate() - 1);
-          await tx.employmentPositionAssignment.update({
-            where: { id: latest.id },
-            data: { effectiveTo: previousDay },
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const employment = await tx.employment.findUnique({
+            where: { id: employmentId },
+            select: {
+              id: true,
+              organizationId: true,
+              departmentId: true,
+              status: true,
+              startDate: true,
+              endDate: true,
+            },
           });
-        }
+          if (!employment) throw new NotFoundException('Employment not found');
+          assertOrganizationPermission(
+            user,
+            employment.organizationId,
+            'employmentPositions.assign',
+          );
+          if (employment.status !== EmploymentStatus.ACTIVE) {
+            throw new ConflictException(
+              'Only active employment can receive a position assignment',
+            );
+          }
+          if (effectiveFrom < employment.startDate) {
+            throw new ConflictException(
+              'Position assignment cannot predate employment start',
+            );
+          }
+          if (employment.endDate && effectiveFrom > employment.endDate) {
+            throw new ConflictException(
+              'Position assignment cannot postdate employment end',
+            );
+          }
 
-        return tx.employmentPositionAssignment.create({
-          data: {
-            employmentId,
-            positionId: position.id,
-            effectiveFrom,
-            reason: dto.reason,
-          },
-          include: {
-            position: {
-              include: {
-                organization: { select: { id: true, code: true, name: true } },
-                department: { select: { id: true, code: true, name: true } },
-                framework: { select: { id: true, code: true, name: true, type: true } },
-                level: { select: { id: true, code: true, title: true, levelOrder: true } },
+          const postingAtEffectiveDate = await tx.employmentPosting.findFirst({
+            where: { employmentId, effectiveFrom: { lte: effectiveFrom } },
+            orderBy: { effectiveFrom: 'desc' },
+            select: { organizationId: true, departmentId: true },
+          });
+          const organizationIdAtEffectiveDate =
+            postingAtEffectiveDate?.organizationId ?? employment.organizationId;
+          const departmentIdAtEffectiveDate = postingAtEffectiveDate
+            ? postingAtEffectiveDate.departmentId
+            : employment.departmentId;
+
+          const position = await tx.jobPosition.findUnique({
+            where: { id: dto.positionId },
+            include: {
+              organization: { select: { id: true, status: true } },
+              department: { select: { id: true, code: true, name: true } },
+              framework: {
+                select: { id: true, code: true, name: true, type: true },
+              },
+              level: {
+                select: { id: true, code: true, title: true, levelOrder: true },
               },
             },
-          },
-        });
-      }, { isolationLevel: 'Serializable' });
+          });
+          if (!position) throw new NotFoundException('Job position not found');
+          assertOrganizationPermission(
+            user,
+            position.organizationId,
+            'employmentPositions.assign',
+          );
+          if (position.organizationId !== organizationIdAtEffectiveDate) {
+            throw new ConflictException(
+              'Job position does not belong to the employment organization',
+            );
+          }
+          if (position.organization.status !== 'ACTIVE') {
+            throw new ConflictException(
+              'Cannot assign a position in an inactive organization',
+            );
+          }
+          if (
+            position.departmentId &&
+            position.departmentId !== departmentIdAtEffectiveDate
+          ) {
+            throw new ConflictException(
+              'Job position does not belong to the employment department',
+            );
+          }
+
+          const latest = await tx.employmentPositionAssignment.findFirst({
+            where: { employmentId },
+            orderBy: { effectiveFrom: 'desc' },
+            select: {
+              id: true,
+              positionId: true,
+              effectiveFrom: true,
+              effectiveTo: true,
+            },
+          });
+          if (latest && effectiveFrom <= latest.effectiveFrom) {
+            throw new ConflictException(
+              'Position assignment date must be later than the latest recorded assignment',
+            );
+          }
+          if (
+            latest?.effectiveTo === null &&
+            latest.positionId === position.id
+          ) {
+            throw new ConflictException(
+              'This job position is already assigned to the employment',
+            );
+          }
+
+          const occupiedSlots = await tx.employmentPositionAssignment.count({
+            where: {
+              positionId: position.id,
+              effectiveFrom: { lte: effectiveFrom },
+              OR: [
+                { effectiveTo: null },
+                { effectiveTo: { gte: effectiveFrom } },
+              ],
+            },
+          });
+          if (occupiedSlots >= position.authorizedSlots) {
+            throw new ConflictException(
+              'All authorized slots for this job position are occupied',
+            );
+          }
+
+          if (latest && latest.effectiveTo === null) {
+            const previousDay = new Date(effectiveFrom);
+            previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+            await tx.employmentPositionAssignment.update({
+              where: { id: latest.id },
+              data: { effectiveTo: previousDay },
+            });
+          }
+
+          return tx.employmentPositionAssignment.create({
+            data: {
+              employmentId,
+              positionId: position.id,
+              effectiveFrom,
+              reason: dto.reason,
+            },
+            include: {
+              position: {
+                include: {
+                  organization: {
+                    select: { id: true, code: true, name: true },
+                  },
+                  department: { select: { id: true, code: true, name: true } },
+                  framework: {
+                    select: { id: true, code: true, name: true, type: true },
+                  },
+                  level: {
+                    select: {
+                      id: true,
+                      code: true,
+                      title: true,
+                      levelOrder: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+        },
+        { isolationLevel: 'Serializable' },
+      );
     } catch (error: any) {
       if (error?.code === 'P2002' || error?.code === 'P2034') {
-        throw new ConflictException('Position assignment changed at the same time; refresh and retry');
+        throw new ConflictException(
+          'Position assignment changed at the same time; refresh and retry',
+        );
       }
       throw error;
     }
@@ -695,7 +849,11 @@ export class EmploymentsService {
             throw new NotFoundException('Employment not found');
           }
 
-          assertOrganizationPermission(user, employment.organizationId, 'postings.create');
+          assertOrganizationPermission(
+            user,
+            employment.organizationId,
+            'postings.create',
+          );
 
           if (employment.status !== EmploymentStatus.ACTIVE) {
             throw new ConflictException(
@@ -819,22 +977,30 @@ export class EmploymentsService {
             });
           }
 
-          const activePositionAssignment = await tx.employmentPositionAssignment.findFirst({
-            where: {
-              employmentId,
-              effectiveFrom: { lte: effectiveFrom },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gte: effectiveFrom } }],
-            },
-            orderBy: { effectiveFrom: 'desc' },
-            include: {
-              position: { select: { organizationId: true, departmentId: true } },
-            },
-          });
+          const activePositionAssignment =
+            await tx.employmentPositionAssignment.findFirst({
+              where: {
+                employmentId,
+                effectiveFrom: { lte: effectiveFrom },
+                OR: [
+                  { effectiveTo: null },
+                  { effectiveTo: { gte: effectiveFrom } },
+                ],
+              },
+              orderBy: { effectiveFrom: 'desc' },
+              include: {
+                position: {
+                  select: { organizationId: true, departmentId: true },
+                },
+              },
+            });
           if (
             activePositionAssignment &&
-            (activePositionAssignment.position.organizationId !== dto.organizationId ||
+            (activePositionAssignment.position.organizationId !==
+              dto.organizationId ||
               (activePositionAssignment.position.departmentId !== null &&
-                activePositionAssignment.position.departmentId !== (departmentId ?? null)))
+                activePositionAssignment.position.departmentId !==
+                  (departmentId ?? null)))
           ) {
             if (effectiveFrom <= activePositionAssignment.effectiveFrom) {
               throw new ConflictException(
@@ -849,20 +1015,27 @@ export class EmploymentsService {
             });
           }
 
-          const futurePositionAssignments = await tx.employmentPositionAssignment.findMany({
-            where: {
-              employmentId,
-              effectiveFrom: { gt: effectiveFrom },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gte: effectiveFrom } }],
-            },
-            include: {
-              position: { select: { organizationId: true, departmentId: true } },
-            },
-          });
+          const futurePositionAssignments =
+            await tx.employmentPositionAssignment.findMany({
+              where: {
+                employmentId,
+                effectiveFrom: { gt: effectiveFrom },
+                OR: [
+                  { effectiveTo: null },
+                  { effectiveTo: { gte: effectiveFrom } },
+                ],
+              },
+              include: {
+                position: {
+                  select: { organizationId: true, departmentId: true },
+                },
+              },
+            });
           const conflictsWithFutureAssignment = futurePositionAssignments.some(
             ({ position }) =>
               position.organizationId !== dto.organizationId ||
-              (position.departmentId !== null && position.departmentId !== (departmentId ?? null)),
+              (position.departmentId !== null &&
+                position.departmentId !== (departmentId ?? null)),
           );
           if (conflictsWithFutureAssignment) {
             throw new ConflictException(
@@ -918,7 +1091,10 @@ export class EmploymentsService {
                   organizationId: dto.organizationId,
                 },
               },
-              create: { personId: employment.personId, organizationId: dto.organizationId },
+              create: {
+                personId: employment.personId,
+                organizationId: dto.organizationId,
+              },
               update: {},
             });
           } else {
@@ -947,7 +1123,262 @@ export class EmploymentsService {
     }
   }
 
-  async updateStatus(id: string, dto: UpdateEmploymentStatusDto, user: AuthenticatedUser) {
+  async findCompensationAssignments(
+    employmentId: string,
+    user: AuthenticatedUser,
+  ) {
+    const employment = await this.prisma.employment.findUnique({
+      where: { id: employmentId },
+      select: { id: true, organizationId: true },
+    });
+    if (!employment) throw new NotFoundException('Employment not found');
+    assertOrganizationPermission(
+      user,
+      employment.organizationId,
+      'employmentCompensation.read',
+    );
+
+    return this.prisma.employmentCompensationAssignment.findMany({
+      where: { employmentId },
+      orderBy: { effectiveFrom: 'asc' },
+      include: {
+        compensationStep: {
+          include: {
+            jobLevel: {
+              select: { id: true, code: true, title: true, levelOrder: true },
+            },
+            compensationScale: {
+              include: {
+                framework: {
+                  include: {
+                    organization: {
+                      select: { id: true, code: true, name: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        employment: { select: { id: true, organizationId: true } },
+      },
+    });
+  }
+
+  async createCompensationAssignment(
+    employmentId: string,
+    dto: CreateEmploymentCompensationAssignmentDto,
+    user: AuthenticatedUser,
+  ) {
+    const effectiveFrom = this.dateOnly(dto.effectiveFrom, 'effectiveFrom');
+    const previousDay = new Date(effectiveFrom);
+    previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const employment = await tx.employment.findUnique({
+            where: { id: employmentId },
+            select: {
+              id: true,
+              organizationId: true,
+              status: true,
+              startDate: true,
+              endDate: true,
+            },
+          });
+          if (!employment) throw new NotFoundException('Employment not found');
+          assertOrganizationPermission(
+            user,
+            employment.organizationId,
+            'employmentCompensation.assign',
+          );
+
+          const closedStatuses: EmploymentStatus[] = [
+            EmploymentStatus.ENDED,
+            EmploymentStatus.RETIRED,
+            EmploymentStatus.TERMINATED,
+            EmploymentStatus.RESIGNED,
+            EmploymentStatus.DISMISSED,
+            EmploymentStatus.DECEASED,
+          ];
+          if (closedStatuses.includes(employment.status)) {
+            throw new ConflictException(
+              'Compensation cannot be assigned to a closed employment',
+            );
+          }
+          if (effectiveFrom < employment.startDate) {
+            throw new ConflictException(
+              'Compensation date cannot be earlier than employment start date',
+            );
+          }
+          if (employment.endDate && effectiveFrom > employment.endDate) {
+            throw new ConflictException(
+              'Compensation date cannot be later than employment end date',
+            );
+          }
+
+          const step = await tx.compensationStep.findUnique({
+            where: { id: dto.compensationStepId },
+            include: {
+              jobLevel: {
+                select: {
+                  id: true,
+                  frameworkId: true,
+                  code: true,
+                  title: true,
+                },
+              },
+              compensationScale: {
+                select: {
+                  id: true,
+                  frameworkId: true,
+                  code: true,
+                  name: true,
+                  currency: true,
+                  effectiveFrom: true,
+                  effectiveTo: true,
+                },
+              },
+            },
+          });
+          if (!step) throw new NotFoundException('Compensation step not found');
+          if (
+            step.jobLevel.frameworkId !== step.compensationScale.frameworkId
+          ) {
+            throw new ConflictException(
+              'Compensation step level does not belong to its scale framework',
+            );
+          }
+          if (
+            step.compensationScale.effectiveFrom > effectiveFrom ||
+            (step.compensationScale.effectiveTo &&
+              step.compensationScale.effectiveTo < effectiveFrom)
+          ) {
+            throw new ConflictException(
+              'Compensation scale is not effective on the assignment date',
+            );
+          }
+
+          const positionAssignment =
+            await tx.employmentPositionAssignment.findFirst({
+              where: {
+                employmentId,
+                effectiveFrom: { lte: effectiveFrom },
+                OR: [
+                  { effectiveTo: null },
+                  { effectiveTo: { gte: effectiveFrom } },
+                ],
+              },
+              orderBy: { effectiveFrom: 'desc' },
+              select: { position: { select: { levelId: true } } },
+            });
+          if (!positionAssignment) {
+            throw new ConflictException(
+              'A position assignment must exist on the compensation effective date',
+            );
+          }
+          if (positionAssignment.position.levelId !== step.jobLevelId) {
+            throw new ConflictException(
+              'Compensation step grade must match the position assigned on that date',
+            );
+          }
+
+          const latestAssignment =
+            await tx.employmentCompensationAssignment.findFirst({
+              where: { employmentId },
+              orderBy: { effectiveFrom: 'desc' },
+              select: { id: true, effectiveFrom: true, effectiveTo: true },
+            });
+          if (
+            latestAssignment &&
+            effectiveFrom <= latestAssignment.effectiveFrom
+          ) {
+            throw new ConflictException(
+              'Compensation date must be later than the latest recorded assignment',
+            );
+          }
+          if (latestAssignment && latestAssignment.effectiveTo === null) {
+            await tx.employmentCompensationAssignment.update({
+              where: { id: latestAssignment.id },
+              data: { effectiveTo: previousDay },
+            });
+          }
+
+          return tx.employmentCompensationAssignment.create({
+            data: {
+              employmentId,
+              compensationStepId: step.id,
+              effectiveFrom,
+              reason: dto.reason,
+            },
+            include: {
+              compensationStep: {
+                include: {
+                  jobLevel: {
+                    select: {
+                      id: true,
+                      code: true,
+                      title: true,
+                      levelOrder: true,
+                    },
+                  },
+                  compensationScale: {
+                    include: {
+                      framework: {
+                        include: {
+                          organization: {
+                            select: { id: true, code: true, name: true },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              employment: { select: { id: true, organizationId: true } },
+            },
+          });
+        },
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new ConflictException(
+          'A compensation assignment already exists for this date',
+        );
+      }
+      if (error?.code === 'P2034') {
+        throw new ConflictException(
+          'Compensation changed at the same time; refresh and retry',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private dateOnly(value: string, fieldName: string) {
+    const match = /^\d{4}-\d{2}-\d{2}$/.exec(value);
+    if (!match) {
+      throw new BadRequestException(`${fieldName} must use YYYY-MM-DD`);
+    }
+    const date = new Date(`${value}T00:00:00.000Z`);
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== value
+    ) {
+      throw new BadRequestException(
+        `${fieldName} is not a valid calendar date`,
+      );
+    }
+    return date;
+  }
+
+  async updateStatus(
+    id: string,
+    dto: UpdateEmploymentStatusDto,
+    user: AuthenticatedUser,
+  ) {
     await this.applyDuePostings(id);
     const terminalStatuses: EmploymentStatus[] = [
       EmploymentStatus.ENDED,
@@ -985,14 +1416,24 @@ export class EmploymentsService {
         async (tx) => {
           const employment = await tx.employment.findUnique({
             where: { id },
-            select: { id: true, organizationId: true, status: true, startDate: true, endDate: true },
+            select: {
+              id: true,
+              organizationId: true,
+              status: true,
+              startDate: true,
+              endDate: true,
+            },
           });
 
           if (!employment) {
             throw new NotFoundException('Employment not found');
           }
 
-          assertOrganizationPermission(user, employment.organizationId, 'employments.status.update');
+          assertOrganizationPermission(
+            user,
+            employment.organizationId,
+            'employments.status.update',
+          );
 
           if (terminalStatuses.includes(employment.status)) {
             throw new ConflictException(
@@ -1034,10 +1475,11 @@ export class EmploymentsService {
               data: { effectiveTo: effectiveDate },
             });
 
-            const activePositionAssignment = await tx.employmentPositionAssignment.findFirst({
-              where: { employmentId: id, effectiveTo: null },
-              select: { id: true, effectiveFrom: true },
-            });
+            const activePositionAssignment =
+              await tx.employmentPositionAssignment.findFirst({
+                where: { employmentId: id, effectiveTo: null },
+                select: { id: true, effectiveFrom: true },
+              });
             if (activePositionAssignment) {
               if (effectiveDate < activePositionAssignment.effectiveFrom) {
                 throw new ConflictException(
@@ -1046,6 +1488,23 @@ export class EmploymentsService {
               }
               await tx.employmentPositionAssignment.update({
                 where: { id: activePositionAssignment.id },
+                data: { effectiveTo: effectiveDate },
+              });
+            }
+
+            const activeCompensationAssignment =
+              await tx.employmentCompensationAssignment.findFirst({
+                where: { employmentId: id, effectiveTo: null },
+                select: { id: true, effectiveFrom: true },
+              });
+            if (activeCompensationAssignment) {
+              if (effectiveDate < activeCompensationAssignment.effectiveFrom) {
+                throw new ConflictException(
+                  'Employment end date cannot be earlier than the current compensation assignment start date',
+                );
+              }
+              await tx.employmentCompensationAssignment.update({
+                where: { id: activeCompensationAssignment.id },
                 data: { effectiveTo: effectiveDate },
               });
             }

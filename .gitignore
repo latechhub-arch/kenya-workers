@@ -2,6 +2,11 @@
 /dist
 /node_modules
 /build
+/mobile/dist
+/android/.gradle
+/android/app/build
+/android/build
+/android/local.properties
 
 # TypeScript build information
 *.tsbuildinfo

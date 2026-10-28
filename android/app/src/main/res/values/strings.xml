@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kenya Workers</string>
+    <string name="title_activity_main">Kenya Workers</string>
+    <string name="package_name">ke.go.kenyaworkers.employee</string>
+    <string name="custom_url_scheme">ke.go.kenyaworkers.employee</string>
+</resources>

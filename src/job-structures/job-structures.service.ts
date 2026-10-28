@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateJobFrameworkDto } from './create-job-framework.dto';
 import { CreateJobLevelDto } from './create-job-level.dto';
+import { CreateJobLevelAliasDto } from './create-job-level-alias.dto';
 import { CreateJobPositionDto } from './create-job-position.dto';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { assertOrganizationPermission, organizationIdsForPermission } from '../auth/organization-access';
@@ -84,6 +85,9 @@ export class JobStructuresService {
     return this.prisma.jobLevel.findMany({
       where: { frameworkId },
       orderBy: { levelOrder: 'asc' },
+      include: {
+        aliases: { orderBy: [{ scheme: 'asc' }, { code: 'asc' }] },
+      },
     });
   }
 
@@ -103,6 +107,42 @@ export class JobStructuresService {
       if (error?.code === 'P2002') {
         throw new ConflictException(
           'Level code or order already exists in this framework',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async createLevelAlias(
+    frameworkId: string,
+    levelId: string,
+    dto: CreateJobLevelAliasDto,
+    user: AuthenticatedUser,
+  ) {
+    const framework = await this.prisma.jobFramework.findUnique({
+      where: { id: frameworkId },
+      select: { id: true, organizationId: true },
+    });
+    if (!framework) throw new NotFoundException('Job framework not found');
+    assertOrganizationPermission(user, framework.organizationId, 'jobLevels.create');
+
+    const level = await this.prisma.jobLevel.findUnique({
+      where: { id: levelId },
+      select: { id: true, frameworkId: true },
+    });
+    if (!level) throw new NotFoundException('Job level not found');
+    if (level.frameworkId !== frameworkId) {
+      throw new ConflictException('Job level does not belong to this framework');
+    }
+
+    try {
+      return await this.prisma.jobLevelAlias.create({
+        data: { ...dto, frameworkId, jobLevelId: levelId },
+      });
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        throw new ConflictException(
+          'This framework label is already assigned to a job level',
         );
       }
       throw error;
