@@ -5,7 +5,7 @@
   const loginView = $('#login-view');
   const appView = $('#app-view');
   const detailOverlay = $('#detail-overlay');
-  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], selected: null, toastTimer: null };
+  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], accounts: [], roles: [], organizations: [], page: 'workforce', selected: null, toastTimer: null };
 
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const fullName = (person = {}) => [person.firstName, person.middleName, person.lastName].filter(Boolean).join(' ') || 'Unnamed person';
@@ -62,8 +62,36 @@
     $('#table-description').textContent = state.employeeAccount ? 'Select a record to review your details.' : 'Select a record to see its employment history.';
     $('#search-input').placeholder = state.employeeAccount ? 'Search your employment records…' : 'Search name, number, organization…';
     $('#today-date').textContent = new Intl.DateTimeFormat('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date());
+    $('#nav-accounts').classList.toggle('hidden', !user.permissions?.includes('users.read'));
+    setPage('workforce');
     loadEmployments();
     if (state.employeeAccount) loadAttendance();
+  }
+
+  function setPage(page) {
+    state.page = page;
+    const accountsPage = page === 'accounts';
+    $('#workforce-heading').classList.toggle('hidden', accountsPage);
+    $('#workforce-view').classList.toggle('hidden', accountsPage);
+    $('#accounts-view').classList.toggle('hidden', !accountsPage);
+    $('#nav-item').classList.toggle('active', !accountsPage);
+    $('#nav-accounts').classList.toggle('active', accountsPage && state.user?.permissions?.includes('users.read'));
+    $('#breadcrumb-title').textContent = accountsPage
+      ? (state.user?.permissions?.includes('users.read') ? 'Account management' : 'My account')
+      : (state.employeeAccount ? 'My employment' : 'Staff records');
+    $('#accounts-title').textContent = state.user?.permissions?.includes('users.read')
+      ? 'Account management'
+      : 'My account';
+    $('#accounts-view > .page-heading .muted').textContent = state.user?.permissions?.includes('users.read')
+      ? 'Manage your profile, staff access, and employee portal accounts.'
+      : 'Manage your profile and sign-in security.';
+    $('#account-admin').classList.toggle('hidden', !state.user?.permissions?.includes('users.read'));
+    $('#create-account-panel').classList.toggle('hidden', !state.user?.permissions?.includes('users.create'));
+    $('#my-account-button').textContent = accountsPage ? 'Back to workspace' : 'My account';
+    if (accountsPage) {
+      loadMyAccount();
+      if (state.user?.permissions?.includes('users.read')) loadAccountDirectory();
+    }
   }
 
   async function loadAttendance() {
@@ -233,6 +261,189 @@
       errorNode.classList.remove('hidden');
       $('#record-count').textContent = 'Records could not be loaded';
     }
+  }
+
+  async function loadMyAccount() {
+    try {
+      const profile = await api('/auth/me');
+      state.user = profile;
+      const nameInput = $('#profile-form [name="fullName"]');
+      if (nameInput) nameInput.value = profile.fullName || '';
+      $('#account-email').value = profile.email || '';
+    } catch (error) {
+      if (error.status === 401) return showLogin();
+      $('#profile-feedback').textContent = error.message;
+    }
+  }
+
+  async function loadAccountDirectory() {
+    $('#accounts-error').classList.add('hidden');
+    $('#account-count').textContent = 'Loading accounts…';
+    try {
+      const [accounts, roles, organizations] = await Promise.all([
+        api('/auth/users'),
+        api('/auth/roles'),
+        api('/organizations'),
+      ]);
+      state.accounts = Array.isArray(accounts) ? accounts : (accounts?.value || []);
+      state.roles = Array.isArray(roles) ? roles : (roles?.value || []);
+      state.organizations = Array.isArray(organizations) ? organizations : (organizations?.value || []);
+      renderAccountDirectory();
+      populateRoleOptions();
+    } catch (error) {
+      if (error.status === 401) return showLogin();
+      $('#accounts-error').textContent = error.message;
+      $('#accounts-error').classList.remove('hidden');
+      $('#account-count').textContent = 'Accounts could not be loaded';
+    }
+  }
+
+  function roleAssignmentsLabel(account) {
+    if (account.personId) return 'Employee self-service';
+    if (!account.roleAssignments?.length) return 'No roles assigned';
+    return account.roleAssignments.map(({ role, organization }) =>
+      `${escapeHtml(role?.name || role?.code || 'Role')} · ${escapeHtml(organization?.name || 'All organizations')}`,
+    ).join('<br>');
+  }
+
+  function renderAccountDirectory() {
+    const search = ($('#account-search')?.value || '').trim().toLowerCase();
+    const rows = state.accounts.filter((account) => {
+      const text = [account.fullName, account.email, account.person?.personNumber,
+        ...(account.roleAssignments || []).flatMap(({ role, organization }) => [role?.name, organization?.name])]
+        .filter(Boolean).join(' ').toLowerCase();
+      return text.includes(search);
+    });
+    $('#account-count').textContent = `${rows.length} of ${state.accounts.length} accounts`;
+    $('#accounts-body').innerHTML = rows.map((account) => {
+      const employeeLabel = account.person
+        ? `${account.person.personNumber || 'Employee'}${account.person.status === 'INACTIVE' ? ' · record inactive' : ''}`
+        : 'Staff sign-in';
+      const status = account.isActive ? 'Active' : 'Suspended';
+      const canManage = state.user?.permissions?.includes('users.manage');
+      const self = account.id === state.user?.id;
+      const actions = [];
+      if (canManage && !self) {
+        actions.push(`<button class="secondary-button account-action" type="button" data-action="status" data-id="${escapeHtml(account.id)}" data-active="${account.isActive}">${account.isActive ? 'Suspend' : 'Reactivate'}</button>`);
+        if (!account.personId) actions.push(`<button class="secondary-button account-action" type="button" data-action="roles" data-id="${escapeHtml(account.id)}">Manage roles</button>`);
+        if (account.activeSessionCount > 0) actions.push(`<button class="secondary-button account-action" type="button" data-action="sessions" data-id="${escapeHtml(account.id)}">End sessions</button>`);
+      }
+      return `<tr><td><div class="person-cell"><span class="person-initial">${escapeHtml(initials(account.fullName || account.email))}</span><div><div class="person-name">${escapeHtml(account.fullName || 'Unnamed account')}</div><div class="person-sub">${escapeHtml(account.email)} · ${escapeHtml(employeeLabel)}</div></div></div></td><td>${account.personId ? 'Employee portal' : 'Staff access'}</td><td class="account-roles">${roleAssignmentsLabel(account)}</td><td><span class="status-pill ${account.isActive ? '' : 'inactive'}">${status}</span></td><td>${Number(account.activeSessionCount || 0)}</td><td><div class="account-actions">${actions.join('') || '<span class="muted">—</span>'}</div></td></tr>`;
+    }).join('');
+    $('#accounts-empty').classList.toggle('hidden', rows.length > 0);
+  }
+
+  function populateRoleOptions() {
+    const roleSelect = $('#create-account-form [name="roleCode"]');
+    const organizationSelect = $('#create-account-form [name="organizationId"]');
+    if (!roleSelect || !organizationSelect) return;
+    roleSelect.innerHTML = `<option value="">Choose a role</option>${state.roles.map((role) => `<option value="${escapeHtml(role.code)}">${escapeHtml(role.name)}</option>`).join('')}`;
+    organizationSelect.innerHTML = `<option value="">Choose an organization</option>${state.organizations.map((organization) => `<option value="${escapeHtml(organization.id)}">${escapeHtml(organization.name)}</option>`).join('')}`;
+    roleSelect.onchange = () => updateRoleScope(roleSelect, organizationSelect);
+  }
+
+  function updateRoleScope(roleSelect, organizationSelect) {
+    const isGlobalRole = roleSelect.value === 'SYSTEM_ADMIN';
+    organizationSelect.disabled = isGlobalRole;
+    organizationSelect.required = !isGlobalRole;
+    if (isGlobalRole) organizationSelect.value = '';
+    const globalOption = organizationSelect.querySelector('option[value=""]');
+    if (globalOption) globalOption.textContent = isGlobalRole ? 'Global access (system administrator)' : 'Choose an organization';
+  }
+
+  async function openAccountRoles(id) {
+    const account = state.accounts.find((item) => item.id === id);
+    if (!account || account.personId) return;
+    const roleOptions = state.roles.map((role) => `<option value="${escapeHtml(role.code)}">${escapeHtml(role.name)}</option>`).join('');
+    const organizationOptions = `<option value="">Global access (system administrator)</option>${state.organizations.map((organization) => `<option value="${escapeHtml(organization.id)}">${escapeHtml(organization.name)}</option>`).join('')}`;
+    const assignments = account.roleAssignments?.length ? account.roleAssignments : [{}];
+    const rowHtml = (assignment = {}) => `<div class="account-role-row"><select class="role-code" aria-label="Role" required><option value="">Choose role</option>${roleOptions}</select><select class="role-organization" aria-label="Organization scope">${organizationOptions}</select><button class="secondary-button remove-role-row" type="button" aria-label="Remove role">Remove</button></div>`;
+    $('#detail-content').innerHTML = `<div class="detail-hero"><span class="detail-avatar">${escapeHtml(initials(account.fullName || account.email))}</span><div><h2 id="detail-name">Access for ${escapeHtml(account.fullName)}</h2><p>${escapeHtml(account.email)}</p></div></div><section class="detail-section"><h3 class="section-heading">Role assignments</h3><p class="muted account-help">Every role must be tied to an organization. System Administrator is global.</p><form id="account-role-form"><div id="account-role-rows">${assignments.map((assignment) => rowHtml(assignment)).join('')}</div><button id="add-role-row" class="secondary-button" type="button">Add another role</button><button class="primary-button" type="submit">Save access</button><p id="role-feedback" class="form-feedback" role="status"></p></form></section>`;
+    const overlay = $('#detail-overlay');
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    const initializeRow = (row, assignment) => {
+      const roleSelect = row.querySelector('.role-code');
+      const organizationSelect = row.querySelector('.role-organization');
+      roleSelect.value = assignment.role?.code || '';
+      organizationSelect.value = assignment.organizationId || '';
+      updateRoleScope(roleSelect, organizationSelect);
+      roleSelect.addEventListener('change', () => updateRoleScope(roleSelect, organizationSelect));
+      row.querySelector('.remove-role-row').addEventListener('click', () => row.remove());
+    };
+    [...$('#account-role-rows').children].forEach((row, index) => initializeRow(row, assignments[index]));
+    $('#add-role-row').addEventListener('click', () => {
+      $('#account-role-rows').insertAdjacentHTML('beforeend', rowHtml());
+      initializeRow($('#account-role-rows').lastElementChild, {});
+    });
+    $('#account-role-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('[type="submit"]');
+      const feedback = $('#role-feedback');
+      const roles = [...$('#account-role-rows').querySelectorAll('.account-role-row')].map((row) => {
+        const code = row.querySelector('.role-code').value;
+        const organizationId = row.querySelector('.role-organization').value;
+        return { code, ...(organizationId ? { organizationId } : {}) };
+      });
+      if (!roles.length) return feedback.textContent = 'Add at least one role assignment.';
+      button.disabled = true;
+      try {
+        await api(`/auth/users/${id}/roles`, { method: 'PATCH', body: JSON.stringify({ roles }) });
+        toast('Account access updated.');
+        closeDetails();
+        await loadAccountDirectory();
+      } catch (error) {
+        feedback.textContent = error.message;
+        button.disabled = false;
+      }
+    });
+  }
+
+  async function handleAccountAction(button) {
+    const account = state.accounts.find((item) => item.id === button.dataset.id);
+    if (!account) return;
+    const action = button.dataset.action;
+    if (action === 'roles') return openAccountRoles(account.id);
+    if (action === 'status') {
+      const isActive = button.dataset.active === 'true';
+      const actionLabel = isActive ? 'suspend' : 'reactivate';
+      if (!window.confirm(`${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} ${account.fullName}'s account?${isActive ? ' All active sessions will be ended.' : ''}`)) return;
+      button.disabled = true;
+      try {
+        await api(`/auth/users/${account.id}/status`, { method: 'PATCH', body: JSON.stringify({ isActive: !isActive }) });
+        toast(isActive ? 'Account suspended and sessions ended.' : 'Account reactivated.');
+        await loadAccountDirectory();
+      } catch (error) { toast(error.message, true); button.disabled = false; }
+    }
+    if (action === 'sessions') {
+      if (!window.confirm(`End all active sessions for ${account.fullName}? They will need to sign in again.`)) return;
+      button.disabled = true;
+      try {
+        const result = await api(`/auth/users/${account.id}/revoke-sessions`, { method: 'POST' });
+        toast(`${result.revokedSessionCount} active session(s) ended.`);
+        await loadAccountDirectory();
+      } catch (error) { toast(error.message, true); button.disabled = false; }
+    }
+  }
+
+  async function createStaffAccount(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const feedback = $('#create-account-feedback');
+    const button = form.querySelector('[type="submit"]');
+    const roles = [{ code: data.roleCode, ...(data.organizationId ? { organizationId: data.organizationId } : {}) }];
+    button.disabled = true;
+    feedback.textContent = '';
+    try {
+      await api('/auth/users', { method: 'POST', body: JSON.stringify({ email: data.email, fullName: data.fullName, password: data.password, roles }) });
+      form.reset();
+      updateRoleScope(form.elements.roleCode, form.elements.organizationId);
+      toast('Staff account created. Share the initial password through an approved channel; ask the user to change it after signing in.');
+      await loadAccountDirectory();
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
   }
 
   function positionFor(employment) {
@@ -575,9 +786,65 @@
     $('#email').focus();
   });
   $('#search-input').addEventListener('input', renderRecords);
+  $('#nav-item').addEventListener('click', () => setPage('workforce'));
+  $('#nav-accounts').addEventListener('click', () => setPage('accounts'));
+  $('#my-account-button').addEventListener('click', () => setPage(state.page === 'accounts' ? 'workforce' : 'accounts'));
+  $('#account-search').addEventListener('input', renderAccountDirectory);
+  $('#accounts-body').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-action]');
+    if (button) handleAccountAction(button);
+  });
+  $('#refresh-accounts').addEventListener('click', loadAccountDirectory);
+  $('#create-account-form').addEventListener('submit', createStaffAccount);
+  $('#profile-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('[type="submit"]');
+    const feedback = $('#profile-feedback');
+    button.disabled = true;
+    feedback.textContent = '';
+    try {
+      const result = await api('/auth/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ fullName: event.currentTarget.elements.fullName.value.trim() }),
+      });
+      state.user.fullName = result.fullName;
+      $('#user-name').textContent = result.fullName;
+      $('#user-avatar').textContent = initials(result.fullName);
+      sessionStorage.setItem(userKey, JSON.stringify(state.user));
+      feedback.textContent = 'Profile saved.';
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  $('#password-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $('#password-feedback');
+    const button = form.querySelector('[type="submit"]');
+    const data = Object.fromEntries(new FormData(form).entries());
+    if (data.newPassword !== data.confirmPassword) {
+      feedback.textContent = 'The new password and confirmation do not match.';
+      return;
+    }
+    button.disabled = true;
+    feedback.textContent = '';
+    try {
+      const result = await api('/auth/me/password', {
+        method: 'PATCH',
+        body: JSON.stringify({ currentPassword: data.currentPassword, newPassword: data.newPassword }),
+      });
+      form.reset();
+      feedback.textContent = `Password updated. ${result.otherSessionsRevoked} other session(s) ended.`;
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
   $('#refresh-button').addEventListener('click', () => {
-    loadEmployments();
-    if (state.employeeAccount) loadAttendance();
+    if (state.page === 'accounts') {
+      loadMyAccount();
+      if (state.user?.permissions?.includes('users.read')) loadAccountDirectory();
+    } else {
+      loadEmployments();
+      if (state.employeeAccount) loadAttendance();
+    }
   });
   $('#logout-button').addEventListener('click', async () => {
     try { await api('/auth/logout', { method: 'POST' }); } catch (_) { /* Clear the browser session even if the server session expired. */ }

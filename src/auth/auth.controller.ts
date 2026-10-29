@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { ChangePasswordDto } from './change-password.dto';
 import { CreateBootstrapDto } from './create-bootstrap.dto';
 import { CreateEmployeeAccountInviteDto } from './create-employee-account-invite.dto';
 import { CreateUserDto } from './create-user.dto';
@@ -20,6 +21,7 @@ import { SessionAuthGuard } from './session-auth.guard';
 import { UpdateUserRolesDto } from './update-user-roles.dto';
 import { UpdateUserStatusDto } from './update-user-status.dto';
 import { RegisterEmployeeAccountDto } from './register-employee-account.dto';
+import { UpdateMyProfileDto } from './update-my-profile.dto';
 import type { AuthenticatedRequest } from './auth.types';
 
 @Controller('auth')
@@ -58,6 +60,24 @@ export class AuthController {
   }
 
   @UseGuards(SessionAuthGuard)
+  @Patch('me/profile')
+  updateMyProfile(
+    @Body() dto: UpdateMyProfileDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.authService.updateMyProfile(dto, request.user);
+  }
+
+  @UseGuards(SessionAuthGuard)
+  @Patch('me/password')
+  changeMyPassword(
+    @Body() dto: ChangePasswordDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.authService.changeMyPassword(dto, request.user);
+  }
+
+  @UseGuards(SessionAuthGuard)
   @Get('me/employee')
   employeePortal(@Req() request: AuthenticatedRequest) {
     return this.authService.employeePortal(request.user);
@@ -89,8 +109,9 @@ export class AuthController {
   updateUserRoles(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateUserRolesDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.authService.updateUserRoles(id, dto);
+    return this.authService.updateUserRoles(id, dto, request.user);
   }
 
   @UseGuards(SessionAuthGuard, PermissionsGuard)
@@ -99,8 +120,16 @@ export class AuthController {
   updateUserStatus(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateUserStatusDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.authService.updateUserStatus(id, dto);
+    return this.authService.updateUserStatus(id, dto, request.user);
+  }
+
+  @UseGuards(SessionAuthGuard, PermissionsGuard)
+  @RequirePermissions('users.manage')
+  @Post('users/:id/revoke-sessions')
+  revokeUserSessions(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.authService.revokeUserSessions(id);
   }
 
   @UseGuards(SessionAuthGuard, PermissionsGuard)

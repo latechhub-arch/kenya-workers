@@ -15,9 +15,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AUTH_SESSION_HOURS, PERMISSIONS, ROLE_DEFINITIONS } from './auth.constants';
 import { CreateBootstrapDto } from './create-bootstrap.dto';
 import { CreateUserDto } from './create-user.dto';
+import { ChangePasswordDto } from './change-password.dto';
 import { LoginDto } from './login.dto';
 import { UpdateUserRolesDto } from './update-user-roles.dto';
 import { UpdateUserStatusDto } from './update-user-status.dto';
+import { UpdateMyProfileDto } from './update-my-profile.dto';
 import { CreateEmployeeAccountInviteDto } from './create-employee-account-invite.dto';
 import { RegisterEmployeeAccountDto } from './register-employee-account.dto';
 import { RoleAssignmentDto } from './role-assignment.dto';
@@ -436,7 +438,7 @@ export class AuthService implements OnModuleInit {
   }
 
   async findUsers() {
-    return this.prisma.user.findMany({
+    const users = await this.prisma.user.findMany({
       orderBy: { email: 'asc' },
       select: {
         id: true,
@@ -444,6 +446,20 @@ export class AuthService implements OnModuleInit {
         fullName: true,
         isActive: true,
         createdAt: true,
+        personId: true,
+        person: {
+          select: {
+            personNumber: true,
+            firstName: true,
+            middleName: true,
+            lastName: true,
+            status: true,
+          },
+        },
+        sessions: {
+          where: { revokedAt: null, expiresAt: { gt: new Date() } },
+          select: { id: true },
+        },
         roleAssignments: {
           select: {
             organizationId: true,
@@ -453,21 +469,33 @@ export class AuthService implements OnModuleInit {
         },
       },
     });
+    return users.map(({ sessions, ...user }) => ({
+      ...user,
+      activeSessionCount: sessions.length,
+      accountType: user.personId ? 'EMPLOYEE' : 'STAFF',
+    }));
   }
 
-  async updateUserRoles(id: string, dto: UpdateUserRolesDto) {
+  async updateUserRoles(id: string, dto: UpdateUserRolesDto, actor: AuthenticatedUser) {
+    if (id === actor.id) {
+      throw new ConflictException('Use another system administrator to change your own roles');
+    }
     const assignments = await this.resolveRoleAssignments(dto.roles);
 
     const target = await this.prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
+        personId: true,
         roleAssignments: {
           select: { organizationId: true, role: { select: { code: true } } },
         },
       },
     });
     if (!target) throw new NotFoundException('User not found');
+    if (target.personId) {
+      throw new ConflictException('Employee portal accounts do not receive staff roles');
+    }
 
     const wasSystemAdmin = target.roleAssignments.some(
       ({ role, organizationId }) => role.code === 'SYSTEM_ADMIN' && !organizationId,
@@ -511,7 +539,10 @@ export class AuthService implements OnModuleInit {
     });
   }
 
-  async updateUserStatus(id: string, dto: UpdateUserStatusDto) {
+  async updateUserStatus(id: string, dto: UpdateUserStatusDto, actor: AuthenticatedUser) {
+    if (id === actor.id && !dto.isActive) {
+      throw new ConflictException('Use another system administrator to deactivate your own account');
+    }
     const target = await this.prisma.user.findUnique({
       where: { id },
       select: {
@@ -554,6 +585,54 @@ export class AuthService implements OnModuleInit {
       }
       return user;
     });
+  }
+
+  async revokeUserSessions(id: string) {
+    const target = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException('User not found');
+    const result = await this.prisma.authSession.updateMany({
+      where: { userId: id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return { userId: id, revokedSessionCount: result.count };
+  }
+
+  async updateMyProfile(dto: UpdateMyProfileDto, user: AuthenticatedUser) {
+    const fullName = dto.fullName.trim();
+    if (!fullName) throw new ConflictException('Full name cannot be empty');
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: { fullName },
+      select: { id: true, email: true, fullName: true },
+    });
+  }
+
+  async changeMyPassword(dto: ChangePasswordDto, user: AuthenticatedUser) {
+    const account = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { passwordHash: true },
+    });
+    if (!account || !(await verifyPassword(dto.currentPassword, account.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new ConflictException('Choose a new password different from your current password');
+    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await hashPassword(dto.newPassword) },
+      });
+      const revoked = await tx.authSession.updateMany({
+        where: { userId: user.id, id: { not: user.sessionId }, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return revoked.count;
+    });
+    return { success: true, otherSessionsRevoked: result };
   }
 
   async findRoles() {

@@ -81,7 +81,9 @@ export class AuditInterceptor implements NestInterceptor {
       entityType === 'organization' ? response?.id : undefined,
     );
     const changedFields = Object.keys(body).filter(
-      (field) => !SENSITIVE_FIELDS.has(field.toLowerCase()),
+      (field) =>
+        !SENSITIVE_FIELDS.has(field.toLowerCase()) &&
+        !field.toLowerCase().includes('password'),
     );
     const metadata: Record<string, string | string[]> = { changedFields };
     for (const field of ['effectiveFrom', 'effectiveDate']) {
