@@ -44,6 +44,17 @@ export class ApprovePensionCaseDto {
   @IsString() @MinLength(5) @MaxLength(1000) approvalReference!: string;
 }
 
+export class EstimateLegacyPensionDto {
+  @Transform(({ value }) => Number(value)) @IsNumber({ maxDecimalPlaces: 0 }) @Min(1) @Max(600) serviceMonths!: number;
+  @Transform(({ value }) => Number(value)) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(100000000) finalAnnualPensionableEmoluments!: number;
+  @IsOptional() @Transform(({ value }) => value == null || value === '' ? value : Number(value)) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(100000000) highestAnnualPensionableEmoluments?: number;
+  @IsOptional() @Transform(({ value }) => value == null ? 0 : Number(value)) @IsNumber({ maxDecimalPlaces: 4 }) @Min(0) @Max(0.25) commutedFraction?: number;
+}
+
+export class EstimateSuperannuationDto {
+  @Transform(({ value }) => Number(value)) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(1000000000) verifiedAccountBalance!: number;
+}
+
 export class RejectPensionCaseDto {
   @IsString() @MinLength(5) @MaxLength(2000) reason!: string;
 }

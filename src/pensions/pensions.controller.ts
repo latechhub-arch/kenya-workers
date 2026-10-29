@@ -8,6 +8,8 @@ import {
   CreatePensionCaseDto,
   CreatePensionEvidenceDto,
   CreatePensionSchemeDto,
+  EstimateLegacyPensionDto,
+  EstimateSuperannuationDto,
   RejectPensionCaseDto,
   ReportPensionerDeathDto,
   ReviewPensionCaseDto,
@@ -49,6 +51,18 @@ export class PensionsController {
   @RequirePermissions('pensions.read')
   findCase(@Param('id', new ParseUUIDPipe()) id: string, @Req() request: AuthenticatedRequest) {
     return this.pensionsService.findCase(id, request.user);
+  }
+
+  @Post('cases/:id/legacy-estimate')
+  @RequirePermissions('pensions.review')
+  estimateLegacy(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: EstimateLegacyPensionDto, @Req() request: AuthenticatedRequest) {
+    return this.pensionsService.estimateLegacy(id, dto, request.user);
+  }
+
+  @Post('cases/:id/superannuation-estimate')
+  @RequirePermissions('pensions.review')
+  estimateSuperannuation(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: EstimateSuperannuationDto, @Req() request: AuthenticatedRequest) {
+    return this.pensionsService.estimateSuperannuation(id, dto, request.user);
   }
 
   @Post('cases/:id/evidence')

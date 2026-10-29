@@ -16,6 +16,8 @@ import {
   CreatePensionCaseDto,
   CreatePensionEvidenceDto,
   CreatePensionSchemeDto,
+  EstimateLegacyPensionDto,
+  EstimateSuperannuationDto,
   RejectPensionCaseDto,
   ReportPensionerDeathDto,
   ReviewPensionCaseDto,
@@ -94,6 +96,79 @@ export class PensionsService implements OnModuleInit, OnModuleDestroy {
   async findCase(id: string, user: AuthenticatedUser) {
     await this.activateDueSchedules();
     return this.getAccessibleCase(id, user, 'pensions.read');
+  }
+
+  async estimateLegacy(caseId: string, dto: EstimateLegacyPensionDto, user: AuthenticatedUser) {
+    const pensionCase = await this.getAccessibleCase(caseId, user, 'pensions.review');
+    if (pensionCase.scheme.schemeType !== 'PUBLIC_SERVICE_LEGACY') {
+      throw new ConflictException('The 1/480 estimate is only available for a verified public-service legacy defined-benefit scheme');
+    }
+    if (dto.highestAnnualPensionableEmoluments != null && dto.highestAnnualPensionableEmoluments < dto.finalAnnualPensionableEmoluments) {
+      throw new BadRequestException('Highest annual pensionable emoluments cannot be lower than final pensionable emoluments');
+    }
+    if (![PensionCaseStatus.DRAFT, PensionCaseStatus.SUBMITTED, PensionCaseStatus.UNDER_REVIEW].some((status) => status === pensionCase.status)) {
+      throw new ConflictException('An estimate can only be saved while a pension case is open');
+    }
+    const fraction = dto.commutedFraction ?? 0;
+    const pensionableEmoluments = Math.min(dto.finalAnnualPensionableEmoluments, dto.highestAnnualPensionableEmoluments ?? dto.finalAnnualPensionableEmoluments);
+    const annualPension = dto.serviceMonths * pensionableEmoluments / 480;
+    const rounded = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const result = {
+      currency: pensionCase.currency,
+      unreducedAnnualPension: rounded(annualPension),
+      commutedFraction: fraction,
+      commutationLumpSum: rounded(annualPension * fraction * 20),
+      estimatedMonthlyPension: rounded(annualPension * (1 - fraction) / 12),
+      note: 'Illustration only. Final entitlement requires scheme verification and approval by the competent pension authority.',
+    };
+    const inputs = {
+      pensionableServiceMonths: dto.serviceMonths,
+      finalAnnualPensionableEmoluments: rounded(dto.finalAnnualPensionableEmoluments),
+      highestAnnualPensionableEmoluments: rounded(dto.highestAnnualPensionableEmoluments ?? dto.finalAnnualPensionableEmoluments),
+      salaryUsedAfterHighestSalaryCheck: rounded(pensionableEmoluments),
+      commutedFraction: fraction,
+      commutationFactor: 20,
+      formula: 'annual pension = (pensionable service months / 480) × final annual pensionable emoluments; up to 25% may be commuted at 20 times the commuted annual amount',
+    };
+    await this.prisma.$transaction(async (tx) => {
+      await tx.pensionCase.update({ where: { id: caseId }, data: {
+        qualifyingServiceYears: new Prisma.Decimal((dto.serviceMonths / 12).toFixed(2)),
+        proposedMonthlyAmount: new Prisma.Decimal(result.estimatedMonthlyPension.toFixed(2)),
+        calculationMethod: 'PUBLIC_SERVICE_LEGACY_1_480',
+        calculationInputs: inputs,
+        calculationResult: result,
+        calculationSource: pensionCase.scheme.officialSource || 'https://www.psss.go.ke/sites/default/files/PSSS%20Downloads/Public-Service-Superannuation-Scheme-HandBook.pdf',
+      } });
+      await tx.pensionCaseEvent.create({ data: { pensionCaseId: caseId, actorUserId: user.id, action: 'LEGACY_PENSION_ESTIMATED', note: `Saved illustrative estimate using ${dto.serviceMonths} months of service; no statutory approval implied` } });
+    });
+    return this.findCase(caseId, user);
+  }
+
+  async estimateSuperannuation(caseId: string, dto: EstimateSuperannuationDto, user: AuthenticatedUser) {
+    const pensionCase = await this.getAccessibleCase(caseId, user, 'pensions.review');
+    if (pensionCase.scheme.schemeType !== 'PUBLIC_SERVICE_SUPERANNUATION') {
+      throw new ConflictException('The account-balance split is only available for the Public Service Superannuation Scheme');
+    }
+    if (![PensionCaseStatus.DRAFT, PensionCaseStatus.SUBMITTED, PensionCaseStatus.UNDER_REVIEW].some((status) => status === pensionCase.status)) {
+      throw new ConflictException('An estimate can only be saved while a pension case is open');
+    }
+    const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const result = {
+      currency: pensionCase.currency,
+      illustrativeLumpSum: round(dto.verifiedAccountBalance / 3),
+      remainingForRegularPensionProcess: round(dto.verifiedAccountBalance * 2 / 3),
+      note: 'Illustration based on the verified account balance entered. The scheme administrator determines the actual benefit and regular payment; this is not an approved entitlement.',
+    };
+    await this.prisma.$transaction(async (tx) => {
+      await tx.pensionCase.update({ where: { id: caseId }, data: {
+        calculationMethod: 'PSSS_VERIFIED_ACCOUNT_BALANCE_SPLIT',
+        calculationInputs: { verifiedAccountBalance: round(dto.verifiedAccountBalance), split: 'one-third of eligible core scheme savings; additional voluntary contributions may have separate treatment; remaining balance proceeds through the scheme benefit process' },
+        calculationResult: result,
+        calculationSource: pensionCase.scheme.officialSource || 'https://psss.go.ke/faqs',
+      } });
+      await tx.pensionCaseEvent.create({ data: { pensionCaseId: caseId, actorUserId: user.id, action: 'SUPERANNUATION_BALANCE_SPLIT_ESTIMATED', note: 'Saved an illustrative one-third/two-thirds split from a verified member account balance; no monthly amount calculated' } });
+    });
+    return this.findCase(caseId, user);
   }
 
   async createCase(dto: CreatePensionCaseDto, user: AuthenticatedUser) {

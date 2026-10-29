@@ -666,6 +666,10 @@ model PensionCase {
   qualifyingServiceYears Decimal?          @db.Decimal(5, 2)
   proposedMonthlyAmount  Decimal?          @db.Decimal(12, 2)
   approvedMonthlyAmount  Decimal?          @db.Decimal(12, 2)
+  calculationMethod      String?           @db.VarChar(100)
+  calculationInputs      Json?
+  calculationResult     Json?
+  calculationSource     String?           @db.VarChar(1000)
   currency               String            @default("KES") @db.VarChar(3)
   submittedAt            DateTime?
   reviewedAt             DateTime?
