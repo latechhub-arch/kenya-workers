@@ -601,11 +601,14 @@
       if (action === 'submit-case') await api(`/pensions/cases/${caseId}/submit`, { method: 'POST', body: '{}' });
       if (action === 'begin-review') await api(`/pensions/cases/${caseId}/review`, { method: 'POST', body: JSON.stringify({ notes: 'Review started in pension administration.' }) });
       if (action === 'approve-case') {
-        const amount = window.prompt('Enter the approved monthly amount from the official pension decision:');
-        if (amount === null) return;
-        const reference = window.prompt('Enter the approval or pension authority reference:');
-        if (reference === null) return;
-        await api(`/pensions/cases/${caseId}/approve`, { method: 'POST', body: JSON.stringify({ approvedMonthlyAmount: Number(amount), approvalReference: reference.trim() }) });
+        const form = document.createElement('form');
+        form.id = 'pension-approval-form';
+        form.className = 'pension-form pension-inline-action';
+        form.dataset.caseId = caseId;
+        form.innerHTML = `<p class="pension-alert pension-form-note">Enter the amount and reference from the authorized pension decision. A saved illustration is not an approval.</p><label>Approved monthly amount (KES)<input name="approvedMonthlyAmount" type="number" min="0.01" max="100000000" step="0.01" required /></label><label>Approval / pension authority reference<input name="approvalReference" type="text" maxlength="160" required /></label><div class="pension-form-actions"><button class="primary-button" type="submit">Confirm approval and schedule</button><button class="secondary-button" type="button" data-pension-cancel>Cancel</button></div><p class="form-feedback" role="status"></p>`;
+        button.closest('.pension-actions').replaceChildren(form);
+        form.querySelector('[name="approvedMonthlyAmount"]').focus();
+        return;
       }
       if (action === 'reject-case') {
         const reason = window.prompt('Reason for rejecting this case:');
@@ -1108,11 +1111,33 @@
       $('#pension-detail').classList.add('hidden');
       return;
     }
+    if (event.target.closest('[data-pension-cancel]')) {
+      renderPensionDetail(state.selectedPensionCaseId);
+      return;
+    }
     const action = event.target.closest('[data-pension-action]');
     if (action) await handlePensionAction(action);
   });
   $('#pension-detail').addEventListener('submit', async (event) => {
     const form = event.target;
+    if (form.id === 'pension-approval-form') {
+      event.preventDefault();
+      const body = Object.fromEntries(new FormData(form).entries());
+      body.approvedMonthlyAmount = Number(body.approvedMonthlyAmount);
+      body.approvalReference = body.approvalReference.trim();
+      const feedback = form.querySelector('.form-feedback');
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        await api(`/pensions/cases/${form.dataset.caseId}/approve`, { method: 'POST', body: JSON.stringify(body) });
+        toast('Pension case approved and schedule created.');
+        await refreshSelectedPensionCase(form.dataset.caseId);
+      } catch (error) {
+        feedback.textContent = error.message;
+        button.disabled = false;
+      }
+      return;
+    }
     if (form.id !== 'pension-evidence-form') return;
     event.preventDefault();
     const body = Object.fromEntries(new FormData(form).entries());

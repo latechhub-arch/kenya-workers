@@ -33,3 +33,4 @@
 }
 
 .pension-section .pension-alert{font-size:9px;line-height:1.5}
+.pension-inline-action{width:100%;padding:14px;border:1px solid #e3eae5;border-radius:9px;background:#f8faf8}.pension-form-note{grid-column:1/-1;margin:0}.pension-form-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pension-form-actions button{min-height:36px;font-size:10px;padding:0 12px}.pension-inline-action .form-feedback{grid-column:1/-1;color:#a33}
