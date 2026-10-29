@@ -80,9 +80,14 @@ export class AttendanceService {
       Number(station.longitude),
     );
     const radiusMeters = Number(station.geofenceRadius);
+    if (distanceMeters > radiusMeters) {
+      throw new ConflictException(
+        `You are outside the assigned workstation area. Your location is about ${Math.round(distanceMeters)} m from the station; the allowed boundary is ${Math.round(radiusMeters)} m. Move inside the boundary and try again.`,
+      );
+    }
     if (distanceMeters + dto.accuracyMeters > radiusMeters) {
       throw new ConflictException(
-        `You are outside the station geofence or the GPS reading is not precise enough. Measured distance: ${Math.round(distanceMeters)} m; reported accuracy: ${Math.round(dto.accuracyMeters)} m; allowed radius: ${Math.round(radiusMeters)} m.`,
+        `Your GPS reading is not precise enough to confirm that you are inside the workstation area. You are about ${Math.round(distanceMeters)} m from the station with ${Math.round(dto.accuracyMeters)} m GPS accuracy; move to an open area and try again.`,
       );
     }
 

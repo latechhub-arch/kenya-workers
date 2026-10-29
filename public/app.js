@@ -100,7 +100,7 @@
         ({ coords, timestamp }) => resolve({
           latitude: coords.latitude,
           longitude: coords.longitude,
-          accuracy: coords.accuracy,
+          accuracyMeters: coords.accuracy,
           locationCapturedAt: timestamp,
         }),
         (error) => reject(new Error(error.code === 1 ? 'Location permission was denied.' : error.code === 2 ? 'A location could not be found. Turn on location services and try again.' : 'Location request timed out. Try again outdoors.')),
@@ -117,6 +117,12 @@
     errorNode.textContent = '';
     try {
       const location = await getCurrentLocation();
+      if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) {
+        throw new Error('Your device could not provide a valid GPS location. Turn on Location and try again outdoors.');
+      }
+      if (!Number.isFinite(location.accuracyMeters)) {
+        throw new Error('Your device did not provide GPS accuracy. Enable Precise location, turn on Location, and try again outdoors.');
+      }
       button.textContent = 'Checking station boundary…';
       await api('/attendance/me/check-in', {
         method: 'POST',
