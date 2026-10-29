@@ -55,6 +55,7 @@
     appView.classList.remove('hidden');
     $('#attendance-card').classList.toggle('hidden', !state.employeeAccount);
     $('#my-pay-card').classList.toggle('hidden', !state.employeeAccount);
+    $('#budget-card').classList.toggle('hidden', !state.employeeAccount);
     $('#nav-title').textContent = state.employeeAccount ? 'My employment' : 'Staff records';
     $('#page-title').textContent = state.employeeAccount ? 'My employment' : 'Staff records';
     $('#page-description').textContent = state.employeeAccount ? 'Your employment details and important work history.' : 'Search and review employment details within your access.';
@@ -65,7 +66,10 @@
     $('#nav-accounts').classList.toggle('hidden', !user.permissions?.includes('users.read'));
     setPage('workforce');
     loadEmployments();
-    if (state.employeeAccount) loadAttendance();
+    if (state.employeeAccount) {
+      loadAttendance();
+      loadBudget();
+    }
   }
 
   function setPage(page) {
@@ -517,6 +521,93 @@
     }
   }
 
+  const budgetCategories = [
+    ['HOUSING', 'Housing / rent'], ['FOOD', 'Food'], ['UTILITIES', 'Utilities'],
+    ['TRANSPORT', 'Transport'], ['FAMILY_SUPPORT', 'Family support'], ['HEALTH', 'Health'],
+    ['EDUCATION', 'Education'], ['DEBT', 'Loan / debt payment'], ['SAVINGS', 'Savings'], ['OTHER', 'Other'],
+  ];
+
+  function addBudgetItemRow(item = {}) {
+    const container = $('#budget-items');
+    if (container.querySelector('.budget-empty')) container.replaceChildren();
+    const row = document.createElement('div');
+    row.className = 'budget-item-row';
+    row.innerHTML = `<label>Category<select class="budget-category" required><option value="">Choose category</option>${budgetCategories.map(([code, label]) => `<option value="${code}">${label}</option>`).join('')}</select></label><label>Label<input class="budget-title" type="text" maxlength="120" placeholder="e.g. Bank loan or home rent" required></label><label>Monthly amount (KES)<input class="budget-amount" type="number" min="0" max="100000000" step="0.01" required></label><label class="budget-balance-field">Remaining loan balance (optional)<input class="budget-balance" type="number" min="0" max="1000000000" step="0.01"></label><button class="secondary-button remove-budget-item" type="button" aria-label="Remove budget item">Remove</button>`;
+    row.querySelector('.budget-category').value = item.category || '';
+    row.querySelector('.budget-title').value = item.title || '';
+    row.querySelector('.budget-amount').value = item.monthlyAmount ?? '';
+    row.querySelector('.budget-balance').value = item.outstandingBalance ?? '';
+    const balanceField = row.querySelector('.budget-balance-field');
+    balanceField.classList.toggle('hidden', row.querySelector('.budget-category').value !== 'DEBT');
+    row.querySelector('.budget-category').addEventListener('change', (event) => {
+      const isDebt = event.currentTarget.value === 'DEBT';
+      balanceField.classList.toggle('hidden', !isDebt);
+      if (!isDebt) row.querySelector('.budget-balance').value = '';
+    });
+    row.querySelector('.remove-budget-item').addEventListener('click', () => row.remove());
+    $('#budget-items').appendChild(row);
+  }
+
+  async function loadBudget() {
+    const overview = $('#budget-overview');
+    try {
+      const budget = await api('/payroll/me/budget');
+      const income = budget.income || {};
+      const incomeText = income.amount === null ? 'Not entered' : moneyLabel(income.amount, income.currency || 'KES');
+      const sourceLabel = income.source === 'PAYSLIP'
+        ? `${income.isProvisional ? 'Provisional payslip' : 'Latest finalized payslip'} · ${String(income.periodMonth).padStart(2, '0')}/${income.periodYear}`
+        : income.source === 'SELF_REPORTED' ? 'Your self-reported monthly take-home pay' : 'No income amount available yet';
+      const analysis = budget.analysis || {};
+      const left = analysis.remaining === null ? '—' : moneyLabel(analysis.remaining, income.currency || 'KES');
+      const advice = (analysis.advice || []).map((message) => `<li>${escapeHtml(message)}</li>`).join('');
+      overview.innerHTML = `<div class="budget-summary-grid"><article><span>Monthly take-home</span><strong>${escapeHtml(incomeText)}</strong><small>${escapeHtml(sourceLabel)}</small></article><article><span>Planned monthly costs</span><strong>${escapeHtml(moneyLabel(analysis.totalOutgoings || 0, income.currency || 'KES'))}</strong><small>Based on the entries below</small></article><article><span>Left after this plan</span><strong class="${analysis.remaining < 0 ? 'budget-negative' : ''}">${escapeHtml(left)}</strong><small>Before any costs you have not entered</small></article></div><div class="budget-advice"><h3>Your budget review</h3><ul>${advice || '<li>Add your monthly costs and loan payments to see a personalized review.</li>'}</ul></div>`;
+      $('#budget-form [name="monthlyTakeHome"]').value = budget.manualMonthlyTakeHome ?? '';
+      $('#budget-income-source').textContent = income.source === 'PAYSLIP'
+        ? 'A latest issued payslip is used when available. This entry is only a fallback if no issued payslip is available.'
+        : 'Enter your estimated monthly take-home amount. You can update it anytime.';
+      $('#budget-items').replaceChildren();
+      if (budget.items?.length) budget.items.forEach((item) => addBudgetItemRow(item));
+      else $('#budget-items').innerHTML = '<p class="budget-empty">No monthly costs entered yet. Add rent, food, family obligations, loans, and other costs that apply to you.</p>';
+      $('#budget-feedback').textContent = '';
+    } catch (error) {
+      if (error.status === 401) return showLogin();
+      overview.innerHTML = `<p class="inline-error">Your budget could not be loaded: ${escapeHtml(error.message)}</p>`;
+    }
+  }
+
+  async function saveBudget(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('[type="submit"]');
+    const feedback = $('#budget-feedback');
+    const rows = [...$('#budget-items').querySelectorAll('.budget-item-row')];
+    const items = [];
+    for (const row of rows) {
+      const category = row.querySelector('.budget-category').value;
+      const title = row.querySelector('.budget-title').value.trim();
+      const monthlyValue = row.querySelector('.budget-amount').value;
+      const balanceValue = row.querySelector('.budget-balance').value;
+      if (!category && !title && !monthlyValue && !balanceValue) continue;
+      if (!category || !title || monthlyValue === '') {
+        feedback.textContent = 'Complete the category, label, and monthly amount for each item, or remove the blank row.';
+        return;
+      }
+      items.push({ category, title, monthlyAmount: Number(monthlyValue), ...(balanceValue !== '' ? { outstandingBalance: Number(balanceValue) } : {}) });
+    }
+    const incomeValue = form.elements.monthlyTakeHome.value;
+    button.disabled = true;
+    feedback.textContent = 'Saving your private plan…';
+    try {
+      await api('/payroll/me/budget', {
+        method: 'PUT',
+        body: JSON.stringify({ monthlyTakeHome: incomeValue === '' ? null : Number(incomeValue), items }),
+      });
+      await loadBudget();
+      feedback.textContent = 'Your private budget plan was saved.';
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
+  }
+
   function filteredRecords() {
     const query = $('#search-input').value.trim().toLowerCase();
     return state.employments.filter((employment) => {
@@ -796,6 +887,8 @@
   });
   $('#refresh-accounts').addEventListener('click', loadAccountDirectory);
   $('#create-account-form').addEventListener('submit', createStaffAccount);
+  $('#add-budget-item').addEventListener('click', () => addBudgetItemRow());
+  $('#budget-form').addEventListener('submit', saveBudget);
   $('#profile-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector('[type="submit"]');

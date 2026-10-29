@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -17,6 +18,7 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ClosePayComponentDto } from './close-pay-component.dto';
 import { CreatePayComponentDto } from './create-pay-component.dto';
 import { CreatePayslipDto } from './create-payslip.dto';
+import { SaveEmployeeBudgetDto } from './save-employee-budget.dto';
 import { PayrollService } from './payroll.service';
 
 @Controller('payroll')
@@ -31,6 +33,21 @@ export class PayrollController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.payrollService.findMyPayslips(year, request.user);
+  }
+
+  @Get('me/budget')
+  @RequirePermissions('payroll.self.read')
+  getMyBudget(@Req() request: AuthenticatedRequest) {
+    return this.payrollService.getMyBudget(request.user);
+  }
+
+  @Put('me/budget')
+  @RequirePermissions('payroll.self.read')
+  saveMyBudget(
+    @Body() dto: SaveEmployeeBudgetDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.payrollService.saveMyBudget(dto, request.user);
   }
 
   @Get('employments/:employmentId/components')

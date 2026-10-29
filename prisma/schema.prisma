@@ -86,6 +86,7 @@ model User {
   sessions                          AuthSession[]
   auditEvents                       AuditEvent[]
   createdEmployeeAccountInvitations EmployeeAccountInvite[] @relation("EmployeeAccountInviteCreator")
+  employeeBudgetProfile             EmployeeBudgetProfile?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -424,7 +425,7 @@ model Payslip {
   correctionReason String?       @db.VarChar(500)
   issuedAt         DateTime      @default(now())
 
-  employment Employment   @relation(fields: [employmentId], references: [id], onDelete: Restrict)
+  employment Employment    @relation(fields: [employmentId], references: [id], onDelete: Restrict)
   lines      PayslipLine[]
 
   createdAt DateTime @default(now())
@@ -450,6 +451,33 @@ model PayslipLine {
 
   @@index([payslipId, displayOrder])
   @@map("payslip_lines")
+}
+
+// Private employee-entered budget inputs. No staff or payroll admin relation exposes these records.
+model EmployeeBudgetProfile {
+  userId          String               @id @db.Uuid
+  monthlyTakeHome Decimal?             @db.Decimal(12, 2)
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items           EmployeeBudgetItem[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@map("employee_budget_profiles")
+}
+
+model EmployeeBudgetItem {
+  id                 String                @id @default(uuid()) @db.Uuid
+  userId             String                @db.Uuid
+  category           String                @db.VarChar(30)
+  title              String                @db.VarChar(120)
+  monthlyAmount      Decimal               @db.Decimal(12, 2)
+  outstandingBalance Decimal?              @db.Decimal(12, 2)
+  profile            EmployeeBudgetProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([userId, category])
+  @@map("employee_budget_items")
 }
 
 model JobPosition {
@@ -574,16 +602,16 @@ model Employment {
 }
 
 model AttendanceRecord {
-  id                 String   @id @default(uuid()) @db.Uuid
-  employmentId       String   @db.Uuid
-  stationId          String   @db.Uuid
-  workDate           DateTime @db.Date
-  checkInAt          DateTime @default(now())
-  locationCapturedAt DateTime
-  latitude           Decimal  @db.Decimal(10, 7)
-  longitude          Decimal  @db.Decimal(10, 7)
-  accuracyMeters     Decimal  @db.Decimal(8, 2)
-  distanceMeters     Decimal  @db.Decimal(10, 2)
+  id                   String   @id @default(uuid()) @db.Uuid
+  employmentId         String   @db.Uuid
+  stationId            String   @db.Uuid
+  workDate             DateTime @db.Date
+  checkInAt            DateTime @default(now())
+  locationCapturedAt   DateTime
+  latitude             Decimal  @db.Decimal(10, 7)
+  longitude            Decimal  @db.Decimal(10, 7)
+  accuracyMeters       Decimal  @db.Decimal(8, 2)
+  distanceMeters       Decimal  @db.Decimal(10, 2)
   mockLocationReported Boolean?
 
   employment Employment @relation(fields: [employmentId], references: [id], onDelete: Restrict)

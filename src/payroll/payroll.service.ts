@@ -12,10 +12,136 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ClosePayComponentDto } from './close-pay-component.dto';
 import { CreatePayComponentDto } from './create-pay-component.dto';
 import { CreatePayslipDto } from './create-payslip.dto';
+import { SaveEmployeeBudgetDto } from './save-employee-budget.dto';
 
 @Injectable()
 export class PayrollService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async getMyBudget(user: AuthenticatedUser) {
+    if (!user.personId) {
+      throw new ForbiddenException('This account is not linked to an employee record');
+    }
+    const [profile, latestPayslip] = await Promise.all([
+      this.prisma.employeeBudgetProfile.findUnique({
+        where: { userId: user.id },
+        include: { items: { orderBy: [{ category: 'asc' }, { title: 'asc' }] } },
+      }),
+      this.prisma.payslip.findFirst({
+        where: { status: PayslipStatus.ISSUED, employment: { personId: user.personId } },
+        orderBy: [{ periodYear: 'desc' }, { periodMonth: 'desc' }, { version: 'desc' }],
+        select: { periodYear: true, periodMonth: true, currency: true, netPay: true, isProvisional: true },
+      }),
+    ]);
+    const income = latestPayslip
+      ? {
+          amount: latestPayslip.netPay.toNumber(),
+          currency: latestPayslip.currency,
+          source: 'PAYSLIP',
+          isProvisional: latestPayslip.isProvisional,
+          periodYear: latestPayslip.periodYear,
+          periodMonth: latestPayslip.periodMonth,
+        }
+      : profile?.monthlyTakeHome
+        ? {
+            amount: profile.monthlyTakeHome.toNumber(),
+            currency: 'KES',
+            source: 'SELF_REPORTED',
+            isProvisional: false,
+            periodYear: null,
+            periodMonth: null,
+          }
+        : { amount: null, currency: 'KES', source: 'NOT_SET', isProvisional: false, periodYear: null, periodMonth: null };
+    const items = (profile?.items || []).map((item) => ({
+      id: item.id,
+      category: item.category,
+      title: item.title,
+      monthlyAmount: item.monthlyAmount.toNumber(),
+      outstandingBalance: item.outstandingBalance?.toNumber() ?? null,
+    }));
+    const amount = income.amount;
+    const totalOutgoings = items.reduce((sum, item) => sum + item.monthlyAmount, 0);
+    const monthlyDebtPayments = items
+      .filter((item) => item.category === 'DEBT')
+      .reduce((sum, item) => sum + item.monthlyAmount, 0);
+    const remaining = amount === null ? null : amount - totalOutgoings;
+    const advice: string[] = [];
+    if (amount === null) {
+      advice.push('No finalized payslip or take-home amount is available. Enter your usual monthly take-home pay to see a budget overview.');
+    } else {
+      if (income.isProvisional) {
+        advice.push('The latest payslip uses provisional pay figures. Treat this overview as an estimate until approved payroll data is available.');
+      }
+      if (remaining !== null && remaining < 0) {
+        advice.push(`Your entered monthly commitments exceed take-home pay by ${income.currency} ${Math.abs(remaining).toFixed(2)}. Recheck each amount and whether it is monthly; then review flexible costs while protecting essential needs and required loan payments.`);
+      } else if (remaining !== null && remaining <= amount * 0.1) {
+        advice.push(`About ${income.currency} ${remaining.toFixed(2)} remains after the items you entered. Consider whether the plan leaves enough for irregular costs; if possible, build a small reserve that fits your situation.`);
+      } else if (remaining !== null && remaining > 0) {
+        advice.push(`About ${income.currency} ${remaining.toFixed(2)} is not assigned in this plan. You can allocate some to upcoming irregular bills, savings, or keep it as a buffer.`);
+      }
+      const debtShare = amount > 0 ? (monthlyDebtPayments / amount) * 100 : 0;
+      const debtCount = items.filter((item) => item.category === 'DEBT' && item.monthlyAmount > 0).length;
+      if (debtCount > 0) {
+        advice.push(`You listed ${debtCount} loan or debt payment${debtCount === 1 ? '' : 's'}, totaling ${income.currency} ${monthlyDebtPayments.toFixed(2)} per month (${debtShare.toFixed(1)}% of take-home pay). This is a planning signal, not an official limit. Check each balance, interest, fees, and end date; contact the lender before changing or missing a required payment.`);
+      }
+      if (!items.some((item) => item.category === 'SAVINGS' && item.monthlyAmount > 0)) {
+        advice.push('No regular saving is included. If your essential costs and required payments allow, even a small amount you can sustain may help with unexpected expenses.');
+      }
+      for (const category of ['HOUSING', 'FOOD'] as const) {
+        const categoryTotal = items.filter((item) => item.category === category).reduce((sum, item) => sum + item.monthlyAmount, 0);
+        if (categoryTotal > 0 && amount > 0) {
+          const label = category === 'HOUSING' ? 'Housing' : 'Food';
+          advice.push(`${label} entries total ${income.currency} ${categoryTotal.toFixed(2)} (${((categoryTotal / amount) * 100).toFixed(1)}% of take-home pay). Use this as a visibility check and adjust the plan to your household’s actual needs.`);
+        }
+      }
+    }
+    return {
+      income,
+      manualMonthlyTakeHome: profile?.monthlyTakeHome?.toNumber() ?? null,
+      items,
+      analysis: { totalOutgoings, monthlyDebtPayments, remaining, advice },
+      privacy: 'Your budget entries are private to your employee account and are not available in staff or payroll administration screens.',
+      updatedAt: profile?.updatedAt ?? null,
+    };
+  }
+
+  async saveMyBudget(dto: SaveEmployeeBudgetDto, user: AuthenticatedUser) {
+    if (!user.personId) {
+      throw new ForbiddenException('This account is not linked to an employee record');
+    }
+    const items = dto.items.map((item) => ({
+      category: item.category,
+      title: item.title.trim(),
+      monthlyAmount: new Prisma.Decimal(item.monthlyAmount.toFixed(2)),
+      outstandingBalance: item.outstandingBalance == null
+        ? undefined
+        : new Prisma.Decimal(item.outstandingBalance.toFixed(2)),
+    }));
+    if (items.some((item) => !item.title)) {
+      throw new BadRequestException('Every budget item needs a label');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.employeeBudgetProfile.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          monthlyTakeHome: dto.monthlyTakeHome == null
+            ? null
+            : new Prisma.Decimal(dto.monthlyTakeHome.toFixed(2)),
+        },
+        update: {
+          ...(dto.monthlyTakeHome === undefined
+            ? {}
+            : { monthlyTakeHome: dto.monthlyTakeHome === null ? null : new Prisma.Decimal(dto.monthlyTakeHome.toFixed(2)) }),
+        },
+      });
+      await tx.employeeBudgetItem.deleteMany({ where: { userId: user.id } });
+      if (items.length) {
+        await tx.employeeBudgetItem.createMany({ data: items.map((item) => ({ ...item, userId: user.id })) });
+      }
+    });
+    return this.getMyBudget(user);
+  }
 
   async findMyPayslips(year: string | undefined, user: AuthenticatedUser) {
     if (!user.personId) {
