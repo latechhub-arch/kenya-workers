@@ -38,7 +38,7 @@ export class AuditInterceptor implements NestInterceptor {
     if (routePath === '/auth/login' || routePath === '/auth/bootstrap') {
       return next.handle();
     }
-    if (routePath === '/payroll/me/budget') {
+    if (routePath === '/payroll/me/budget' || routePath === '/payroll/me/budget-coach') {
       return next.handle();
     }
 

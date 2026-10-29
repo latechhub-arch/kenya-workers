@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { EmploymentStatus, PayslipStatus, PayComponentType, Prisma } from '@prisma/client';
 import { assertOrganizationPermission } from '../auth/organization-access';
@@ -13,10 +14,104 @@ import { ClosePayComponentDto } from './close-pay-component.dto';
 import { CreatePayComponentDto } from './create-pay-component.dto';
 import { CreatePayslipDto } from './create-payslip.dto';
 import { SaveEmployeeBudgetDto } from './save-employee-budget.dto';
+import { AskBudgetCoachDto } from './ask-budget-coach.dto';
 
 @Injectable()
 export class PayrollService {
+  private readonly budgetCoachRequests = new Map<string, number[]>();
+
   constructor(private readonly prisma: PrismaService) {}
+
+  getBudgetCoachStatus(user: AuthenticatedUser) {
+    if (!user.personId) {
+      throw new ForbiddenException('This account is not linked to an employee record');
+    }
+    return { available: Boolean(process.env.OPENAI_API_KEY) };
+  }
+
+  async askBudgetCoach(dto: AskBudgetCoachDto, user: AuthenticatedUser) {
+    if (!user.personId) {
+      throw new ForbiddenException('This account is not linked to an employee record');
+    }
+    if (!dto.consent) {
+      throw new BadRequestException('Your consent is required before sending a question');
+    }
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new ServiceUnavailableException('The money coach is not available yet. Your saved plan is unaffected.');
+    }
+
+    const now = Date.now();
+    const recent = (this.budgetCoachRequests.get(user.id) ?? []).filter((time) => now - time < 60_000);
+    if (recent.length >= 8) {
+      throw new BadRequestException('Please wait a minute before asking another money coach question');
+    }
+    recent.push(now);
+    this.budgetCoachRequests.set(user.id, recent);
+
+    const budget = await this.getMyBudget(user);
+    const income = budget.income;
+    const categories = new Map<string, number>();
+    for (const item of budget.items) {
+      categories.set(item.category, (categories.get(item.category) ?? 0) + item.monthlyAmount);
+    }
+    const anonymousSummary = {
+      currency: income.currency,
+      monthlyTakeHome: income.amount,
+      incomeSource: income.source,
+      provisional: income.isProvisional,
+      period: income.periodYear && income.periodMonth
+        ? `${income.periodYear}-${String(income.periodMonth).padStart(2, '0')}`
+        : null,
+      monthlyTotalsByCategory: Object.fromEntries(categories),
+      monthlyOutgoings: budget.analysis.totalOutgoings,
+      monthlyDebtPayments: budget.analysis.monthlyDebtPayments,
+      amountRemainingAfterEnteredItems: budget.analysis.remaining,
+    };
+    const history = (dto.history ?? []).slice(-10).map((message) => ({
+      role: message.role,
+      content: message.content.trim().slice(0, 1000),
+    }));
+    const input = [
+      { role: 'developer', content: `You are a supportive personal budgeting coach for an employee in Kenya. Use the anonymous figures provided for this request and the conversation only. Be non-judgmental, practical, concise, and clear about assumptions. The numbers may be provisional estimates, not approved or payable salary. Do not claim you are a licensed financial adviser. Do not give investment, tax, legal, or financial product recommendations. Do not advise missing required payments or taking a new loan. For debt pressure, suggest checking lender balances, rates, fees and terms and discussing options directly with the lender. Do not apply universal budget percentages as rules. If the user asks for a scenario, calculate it from supplied figures and state assumptions. Do not ask for names, account numbers, national IDs, or other identifying details. If asked, explain the employee can end this chat and that messages are not saved by this application. Anonymous budget figures: ${JSON.stringify(anonymousSummary)}` },
+      ...history,
+      { role: 'user', content: dto.question.trim() },
+    ];
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.OPENAI_FINANCIAL_COACH_MODEL || 'gpt-6-luna',
+          store: false,
+          max_output_tokens: 700,
+          input,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('The money coach could not be reached. Please try again later.');
+    }
+    if (!response.ok) {
+      throw new ServiceUnavailableException('The money coach could not answer right now. Please try again later.');
+    }
+    const result = await response.json() as {
+      output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+    };
+    const answer = result.output
+      ?.filter((item) => item.type === 'message')
+      .flatMap((item) => item.content ?? [])
+      .filter((item) => item.type === 'output_text')
+      .map((item) => item.text ?? '')
+      .join('\n')
+      .trim();
+    if (!answer) {
+      throw new ServiceUnavailableException('The money coach returned no answer. Please try again later.');
+    }
+    return { answer };
+  }
 
   async getMyBudget(user: AuthenticatedUser) {
     if (!user.personId) {

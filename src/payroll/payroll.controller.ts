@@ -18,6 +18,7 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { ClosePayComponentDto } from './close-pay-component.dto';
 import { CreatePayComponentDto } from './create-pay-component.dto';
 import { CreatePayslipDto } from './create-payslip.dto';
+import { AskBudgetCoachDto } from './ask-budget-coach.dto';
 import { SaveEmployeeBudgetDto } from './save-employee-budget.dto';
 import { PayrollService } from './payroll.service';
 
@@ -48,6 +49,21 @@ export class PayrollController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.payrollService.saveMyBudget(dto, request.user);
+  }
+
+  @Get('me/budget-coach/status')
+  @RequirePermissions('payroll.self.read')
+  getBudgetCoachStatus(@Req() request: AuthenticatedRequest) {
+    return this.payrollService.getBudgetCoachStatus(request.user);
+  }
+
+  @Post('me/budget-coach')
+  @RequirePermissions('payroll.self.read')
+  askBudgetCoach(
+    @Body() dto: AskBudgetCoachDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.payrollService.askBudgetCoach(dto, request.user);
   }
 
   @Get('employments/:employmentId/components')

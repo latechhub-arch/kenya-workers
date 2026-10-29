@@ -5,7 +5,7 @@
   const loginView = $('#login-view');
   const appView = $('#app-view');
   const detailOverlay = $('#detail-overlay');
-  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], accounts: [], roles: [], organizations: [], page: 'workforce', selected: null, toastTimer: null };
+  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], accounts: [], roles: [], organizations: [], page: 'workforce', selected: null, toastTimer: null, budgetCoachAvailable: false, budgetCoachConsent: false, coachHistory: [] };
 
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const fullName = (person = {}) => [person.firstName, person.middleName, person.lastName].filter(Boolean).join(' ') || 'Unnamed person';
@@ -33,6 +33,8 @@
   function showLogin() {
     state.token = null;
     state.user = null;
+    state.budgetCoachConsent = false;
+    state.coachHistory = [];
     sessionStorage.removeItem(tokenKey);
     sessionStorage.removeItem(userKey);
     loginView.classList.remove('hidden');
@@ -550,6 +552,15 @@
 
   async function loadBudget() {
     const overview = $('#budget-overview');
+    api('/payroll/me/budget-coach/status').then((status) => {
+      state.budgetCoachAvailable = Boolean(status.available);
+      $('#coach-unavailable').classList.toggle('hidden', state.budgetCoachAvailable);
+      $('#coach-consent-panel').classList.toggle('hidden', !state.budgetCoachAvailable || state.budgetCoachConsent);
+    }).catch(() => {
+      state.budgetCoachAvailable = false;
+      $('#coach-unavailable').classList.remove('hidden');
+      $('#coach-consent-panel').classList.add('hidden');
+    });
     try {
       const budget = await api('/payroll/me/budget');
       const income = budget.income || {};
@@ -573,6 +584,68 @@
       if (error.status === 401) return showLogin();
       overview.innerHTML = `<p class="inline-error">Your budget could not be loaded: ${escapeHtml(error.message)}</p>`;
     }
+  }
+
+  function startBudgetCoach() {
+    if (!state.budgetCoachAvailable || !$('#coach-consent').checked) return;
+    state.budgetCoachConsent = true;
+    $('#coach-consent-panel').classList.add('hidden');
+    $('#coach-chat').classList.remove('hidden');
+    $('#coach-feedback').textContent = '';
+    if (!state.coachHistory.length) {
+      state.coachHistory.push({ role: 'assistant', content: 'I can help you understand the figures you entered and compare simple scenarios. What would you like to look at?' });
+      renderBudgetCoachMessages();
+    }
+    $('#coach-question').focus();
+  }
+
+  function renderBudgetCoachMessages() {
+    const container = $('#coach-messages');
+    container.innerHTML = state.coachHistory.map((message) => `<article class="coach-message ${message.role === 'user' ? 'from-user' : 'from-coach'}"><strong>${message.role === 'user' ? 'You' : 'Money coach'}</strong><p>${escapeHtml(message.content).replace(/\n/g, '<br>')}</p></article>`).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function sendBudgetCoachQuestion(event) {
+    event.preventDefault();
+    if (!state.budgetCoachConsent) return;
+    const form = event.currentTarget;
+    const question = form.elements.question.value.trim();
+    const feedback = $('#coach-feedback');
+    const button = $('#coach-send');
+    if (!question || question.length > 1000) return;
+    const history = state.coachHistory.filter((message) => message.role !== 'assistant' || message.content !== 'I can help you understand the figures you entered and compare simple scenarios. What would you like to look at?').slice(-10);
+    state.coachHistory.push({ role: 'user', content: question });
+    renderBudgetCoachMessages();
+    form.elements.question.value = '';
+    button.disabled = true;
+    feedback.textContent = 'The coach is preparing a reply…';
+    try {
+      const result = await api('/payroll/me/budget-coach', {
+        method: 'POST',
+        body: JSON.stringify({ consent: true, question, history }),
+      });
+      state.coachHistory.push({ role: 'assistant', content: result.answer });
+      feedback.textContent = '';
+      renderBudgetCoachMessages();
+    } catch (error) {
+      state.coachHistory.pop();
+      form.elements.question.value = question;
+      feedback.textContent = error.message;
+      renderBudgetCoachMessages();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function endBudgetCoach() {
+    state.budgetCoachConsent = false;
+    state.coachHistory = [];
+    $('#coach-consent').checked = false;
+    $('#coach-start').disabled = true;
+    $('#coach-chat').classList.add('hidden');
+    $('#coach-consent-panel').classList.toggle('hidden', !state.budgetCoachAvailable);
+    $('#coach-messages').replaceChildren();
+    $('#coach-feedback').textContent = '';
   }
 
   async function saveBudget(event) {
@@ -889,6 +962,10 @@
   $('#create-account-form').addEventListener('submit', createStaffAccount);
   $('#add-budget-item').addEventListener('click', () => addBudgetItemRow());
   $('#budget-form').addEventListener('submit', saveBudget);
+  $('#coach-consent').addEventListener('change', (event) => { $('#coach-start').disabled = !event.currentTarget.checked; });
+  $('#coach-start').addEventListener('click', startBudgetCoach);
+  $('#coach-form').addEventListener('submit', sendBudgetCoachQuestion);
+  $('#coach-end').addEventListener('click', endBudgetCoach);
   $('#profile-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector('[type="submit"]');
