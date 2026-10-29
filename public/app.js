@@ -100,8 +100,9 @@
         ({ coords, timestamp }) => resolve({
           latitude: coords.latitude,
           longitude: coords.longitude,
-          accuracyMeters: coords.accuracy,
+          accuracyMeters: Math.ceil(coords.accuracy * 100) / 100,
           locationCapturedAt: timestamp,
+          mockLocationDetected: null,
         }),
         (error) => reject(new Error(error.code === 1 ? 'Location permission was denied.' : error.code === 2 ? 'A location could not be found. Turn on location services and try again.' : 'Location request timed out. Try again outdoors.')),
         { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 },

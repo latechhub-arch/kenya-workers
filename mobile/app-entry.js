@@ -1,9 +1,10 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 import '../public/styles.css';
 
 window.KWMS_API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 window.KWMS_IS_MOBILE_APP = Capacitor.isNativePlatform();
+const DeviceLocation = registerPlugin('DeviceLocation');
 
 window.KWMS_GET_LOCATION = async () => {
   let permissions = await Geolocation.checkPermissions();
@@ -12,6 +13,10 @@ window.KWMS_GET_LOCATION = async () => {
   }
   if (permissions.location !== 'granted') {
     throw new Error('Precise location permission is needed to mark attendance.');
+  }
+
+  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+    return DeviceLocation.getCurrentPosition();
   }
 
   const position = await Geolocation.getCurrentPosition({
@@ -23,8 +28,9 @@ window.KWMS_GET_LOCATION = async () => {
   return {
     latitude: position.coords.latitude,
     longitude: position.coords.longitude,
-    accuracyMeters: position.coords.accuracy,
+    accuracyMeters: Math.ceil(position.coords.accuracy * 100) / 100,
     locationCapturedAt: position.timestamp,
+    mockLocationDetected: null,
   };
 };
 

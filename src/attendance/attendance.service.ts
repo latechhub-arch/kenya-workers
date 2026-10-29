@@ -2,11 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedUser } from '../auth/auth.types';
+import { AuditService } from '../audit/audit.service';
 import { CheckInDto } from './check-in.dto';
 
 const ATTENDANCE_TIME_ZONE = 'Africa/Nairobi';
@@ -16,7 +18,12 @@ const MAX_ACCURACY_METERS = 100;
 
 @Injectable()
 export class AttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AttendanceService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+  ) {}
 
   async getToday(user: AuthenticatedUser) {
     const { employment, station, workDate } = await this.currentWorkSite(user);
@@ -28,6 +35,7 @@ export class AttendanceService {
         locationCapturedAt: true,
         accuracyMeters: true,
         distanceMeters: true,
+        mockLocationReported: true,
         station: { select: { id: true, code: true, name: true } },
       },
     });
@@ -52,6 +60,26 @@ export class AttendanceService {
   }
 
   async checkIn(dto: CheckInDto, user: AuthenticatedUser) {
+    if (dto.mockLocationDetected === true) {
+      try {
+        await this.auditService.record({
+          actorUserId: user.id,
+          action: 'POST /attendance/me/check-in rejected',
+          entityType: 'attendance_check_in_attempt',
+          metadata: {
+            reason: 'mock_location_reported',
+            accuracyMeters: dto.accuracyMeters,
+            locationCapturedAt: dto.locationCapturedAt,
+          },
+        });
+      } catch (error) {
+        this.logger.error('Could not record a mock-location attendance attempt', error);
+      }
+      throw new ForbiddenException(
+        'Android reported that this GPS reading is simulated. Turn off mock-location apps and try again with a fresh location.',
+      );
+    }
+
     const now = new Date();
     const locationCapturedAt = new Date(dto.locationCapturedAt);
     const age = now.getTime() - locationCapturedAt.getTime();
@@ -103,6 +131,7 @@ export class AttendanceService {
           longitude: dto.longitude,
           accuracyMeters: dto.accuracyMeters,
           distanceMeters,
+          mockLocationReported: dto.mockLocationDetected ?? null,
         },
         select: {
           id: true,
@@ -111,6 +140,7 @@ export class AttendanceService {
           locationCapturedAt: true,
           accuracyMeters: true,
           distanceMeters: true,
+          mockLocationReported: true,
           station: { select: { id: true, code: true, name: true } },
         },
       });

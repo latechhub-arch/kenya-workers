@@ -1,4 +1,4 @@
-import { IsInt, IsNumber, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 export class CheckInDto {
   @IsNumber({ maxDecimalPlaces: 7 })
@@ -19,4 +19,8 @@ export class CheckInDto {
   @IsInt()
   @Min(0)
   locationCapturedAt!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  mockLocationDetected?: boolean;
 }

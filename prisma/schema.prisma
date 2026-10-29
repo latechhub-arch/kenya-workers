@@ -584,6 +584,7 @@ model AttendanceRecord {
   longitude          Decimal  @db.Decimal(10, 7)
   accuracyMeters     Decimal  @db.Decimal(8, 2)
   distanceMeters     Decimal  @db.Decimal(10, 2)
+  mockLocationReported Boolean?
 
   employment Employment @relation(fields: [employmentId], references: [id], onDelete: Restrict)
   station    Station    @relation(fields: [stationId], references: [id], onDelete: Restrict)
