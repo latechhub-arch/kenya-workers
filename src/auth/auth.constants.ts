@@ -37,6 +37,12 @@ export const PERMISSIONS = [
   'payroll.read',
   'payroll.manage',
   'payroll.self.read',
+  'pensions.read',
+  'pensions.create',
+  'pensions.manage',
+  'pensions.review',
+  'pensions.approve',
+  'pensions.death.review',
 ] as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[number];
@@ -79,6 +85,9 @@ export const ROLE_DEFINITIONS: Record<
       'employmentPositions.assign',
       'employmentCompensation.read',
       'employeeAccounts.invite',
+      'pensions.read',
+      'pensions.create',
+      'pensions.review',
     ],
   },
   AUDITOR: {

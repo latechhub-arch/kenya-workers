@@ -55,6 +55,7 @@
         <a class="wordmark" href="#" aria-label="Kenya Workers home"><span class="brand-mark small">KW</span><span>Kenya Workers<small>STAFF MANAGEMENT</small></span></a>
         <div class="nav-label">WORKSPACE</div>
         <button id="nav-item" class="nav-item active" type="button"><span class="nav-icon">▦</span> <span id="nav-title">Staff records</span></button>
+        <button id="nav-pensions" class="nav-item hidden" type="button"><span class="nav-icon">◷</span> Pension cases</button>
         <button id="nav-accounts" class="nav-item hidden" type="button"><span class="nav-icon">♙</span> Account management</button>
         <div class="sidebar-bottom">
           <div class="sidebar-help"><span class="help-icon">i</span><div><strong>Need assistance?</strong><small>Contact your system administrator.</small></div></div>
@@ -136,6 +137,29 @@
               </section>
             </section>
             <footer class="page-footer">Kenya Workers Management System <span>•</span> Account access and security</footer>
+          </section>
+
+          <section id="pensions-view" class="hidden" aria-labelledby="pensions-title">
+            <div class="page-heading"><div><p class="eyebrow">RETIREMENT BENEFITS</p><h1 id="pensions-title">Pension cases</h1><p class="muted">Review retirement eligibility, evidence, payment schedules, and death reports.</p></div><button id="refresh-pensions" class="secondary-button" type="button">Refresh</button></div>
+            <div class="pension-workflow-note">This workflow records approvals and monthly schedules; it does not transfer funds or calculate statutory benefits. Apply the rules and evidence requirements for each scheme.</div>
+            <section id="pension-scheme-panel" class="records-card pension-panel hidden">
+              <div class="records-heading"><div><h2>Set up a pension scheme</h2><p class="muted">Configure the scheme, eligibility reference, and required evidence for its organization.</p></div></div>
+              <form id="pension-scheme-form" class="pension-form">
+                <label>Organization<select name="organizationId" required></select></label><label>Scheme code<input name="code" required maxlength="50" placeholder="e.g. KDF-RETIREMENT" /></label><label>Scheme name<input name="name" required maxlength="255" /></label><label>Scheme type<select name="schemeType" required><option value="">Choose a type</option><option value="PUBLIC_SERVICE_LEGACY">Public service legacy</option><option value="PUBLIC_SERVICE_SUPERANNUATION">Public Service Superannuation Scheme</option><option value="KDF">Kenya Defence Forces</option><option value="NATIONAL_POLICE">National Police Service</option><option value="COUNTY">County scheme</option><option value="OTHER">Other</option></select></label>
+                <label>Eligibility policy / review notes<textarea name="eligibilityPolicy" maxlength="3000" rows="2" placeholder="Record the applicable approved scheme rule; do not enter assumptions."></textarea></label><label>Official source URL<input name="officialSource" type="url" maxlength="1000" placeholder="https://…" /></label><label>Required evidence<select name="requiredEvidenceTypes" multiple size="4"><option value="RETIREMENT_NOTICE">Retirement notice</option><option value="SERVICE_RECORD">Service record</option><option value="IDENTITY">Identity verification</option><option value="BENEFICIARY_NOMINATION">Beneficiary nomination</option><option value="OTHER">Other scheme evidence</option></select><small>Retirement notice and service record are always required too.</small></label>
+                <button class="primary-button" type="submit">Save scheme</button><p id="pension-scheme-feedback" class="form-feedback" role="status"></p>
+              </form>
+            </section>
+            <section id="pension-case-panel" class="records-card pension-panel hidden">
+              <div class="records-heading"><div><h2>Open a retirement case</h2><p class="muted">Create a case for an employee and the applicable scheme.</p></div></div>
+              <form id="pension-case-form" class="pension-form">
+                <label>Employment<select name="employmentId" required></select></label><label>Pension scheme<select name="schemeId" required></select></label><label>Retirement date<input name="retirementDate" type="date" required /></label><label>Qualifying service (years, optional)<input name="qualifyingServiceYears" type="number" min="0" max="100" step="0.01" /></label><label>Proposed monthly amount (optional)<input name="proposedMonthlyAmount" type="number" min="0" step="0.01" /></label><label>Currency<input name="currency" value="KES" maxlength="3" /></label><label>Case reference (optional)<input name="caseReference" maxlength="100" /></label>
+                <button class="primary-button" type="submit">Create draft case</button><p id="pension-case-feedback" class="form-feedback" role="status"></p>
+              </form>
+            </section>
+            <section class="records-card pension-panel"><div class="records-heading"><div><h2>Retirement cases</h2><p class="muted" id="pension-case-count">Loading pension cases…</p></div></div><div id="pension-error" class="inline-error hidden" role="alert"></div><div class="table-scroll"><table><thead><tr><th>EMPLOYEE</th><th>ORGANIZATION</th><th>SCHEME</th><th>RETIREMENT</th><th>CASE STATUS</th><th>SCHEDULE</th></tr></thead><tbody id="pension-cases-body"></tbody></table></div><div id="pension-empty" class="empty-state hidden"><strong>No pension cases</strong><p>Create a scheme and open a retirement case to get started.</p></div></section>
+            <section id="pension-detail" class="records-card pension-panel hidden" aria-live="polite"></section>
+            <footer class="page-footer">Kenya Workers Management System <span>•</span> Restricted pension administration records</footer>
           </section>
         </main>
       </section>

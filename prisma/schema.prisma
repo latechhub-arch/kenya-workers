@@ -54,6 +54,29 @@ enum PayslipStatus {
   SUPERSEDED
 }
 
+enum PensionCaseStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  DEATH_REPORTED
+  CLOSED
+}
+
+enum PensionScheduleStatus {
+  SCHEDULED
+  ACTIVE
+  SUSPENDED
+  STOPPED
+}
+
+enum PensionEvidenceStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
 enum EmploymentStatus {
   ACTIVE
   SUSPENDED
@@ -87,6 +110,12 @@ model User {
   auditEvents                       AuditEvent[]
   createdEmployeeAccountInvitations EmployeeAccountInvite[] @relation("EmployeeAccountInviteCreator")
   employeeBudgetProfile             EmployeeBudgetProfile?
+  createdPensionCases               PensionCase[]           @relation("PensionCaseCreator")
+  approvedPensionCases              PensionCase[]           @relation("PensionCaseApprover")
+  reviewedPensionCases              PensionCase[]           @relation("PensionCaseReviewer")
+  verifiedPensionEvidence           PensionEvidence[]       @relation("PensionEvidenceVerifier")
+  reviewedPensionDeaths             PensionCase[]           @relation("PensionDeathReviewer")
+  pensionCaseEvents                 PensionCaseEvent[]      @relation("PensionCaseEventActor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -202,6 +231,7 @@ model Organization {
   userRoleAssignments UserRole[]
   personScopes        PersonOrganizationScope[]
   auditEvents         AuditEvent[]
+  pensionSchemes      PensionScheme[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -587,6 +617,7 @@ model Employment {
   payComponents           EmploymentPayComponent[]
   payslips                Payslip[]
   attendanceRecords       AttendanceRecord[]
+  pensionCases            PensionCase[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -599,6 +630,135 @@ model Employment {
   @@index([employmentType])
   @@index([startDate])
   @@map("employments")
+}
+
+// Scheme rules are recorded as policy references and eligibility notes. The
+// application does not infer legal eligibility or calculate statutory benefits.
+model PensionScheme {
+  id                    String   @id @default(uuid()) @db.Uuid
+  organizationId        String   @db.Uuid
+  code                  String   @db.VarChar(50)
+  name                  String   @db.VarChar(255)
+  schemeType            String   @db.VarChar(60)
+  eligibilityPolicy     String?  @db.VarChar(3000)
+  officialSource        String?  @db.VarChar(1000)
+  requiredEvidenceTypes String[] @default([])
+  isActive              Boolean  @default(true)
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  cases        PensionCase[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("pension_schemes")
+}
+
+model PensionCase {
+  id                     String            @id @default(uuid()) @db.Uuid
+  employmentId           String            @db.Uuid
+  schemeId               String            @db.Uuid
+  status                 PensionCaseStatus @default(DRAFT)
+  caseReference          String?           @unique @db.VarChar(100)
+  retirementDate         DateTime          @db.Date
+  qualifyingServiceYears Decimal?          @db.Decimal(5, 2)
+  proposedMonthlyAmount  Decimal?          @db.Decimal(12, 2)
+  approvedMonthlyAmount  Decimal?          @db.Decimal(12, 2)
+  currency               String            @default("KES") @db.VarChar(3)
+  submittedAt            DateTime?
+  reviewedAt             DateTime?
+  reviewedByUserId       String?           @db.Uuid
+  reviewNotes            String?           @db.VarChar(2000)
+  approvedAt             DateTime?
+  approvedByUserId       String?           @db.Uuid
+  deathReportedAt        DateTime?
+  deathEffectiveDate     DateTime?         @db.Date
+  deathCertificateRef    String?           @db.VarChar(255)
+  deathReviewedAt        DateTime?
+  deathReviewedByUserId  String?           @db.Uuid
+  deathReviewNotes       String?           @db.VarChar(2000)
+  survivorClaimStatus    String            @default("NOT_ASSESSED") @db.VarChar(40)
+  createdByUserId        String            @db.Uuid
+
+  employment      Employment              @relation(fields: [employmentId], references: [id], onDelete: Restrict)
+  scheme          PensionScheme           @relation(fields: [schemeId], references: [id], onDelete: Restrict)
+  createdBy       User                    @relation("PensionCaseCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  approvedBy      User?                   @relation("PensionCaseApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  reviewedBy      User?                   @relation("PensionCaseReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  deathReviewedBy User?                   @relation("PensionDeathReviewer", fields: [deathReviewedByUserId], references: [id], onDelete: SetNull)
+  evidence        PensionEvidence[]
+  schedule        PensionPaymentSchedule?
+  events          PensionCaseEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employmentId, schemeId])
+  @@index([employmentId, status])
+  @@index([schemeId, status])
+  @@map("pension_cases")
+}
+
+// Keep metadata/reference only until a secured document-storage service exists.
+// Never upload or persist certificate images in ordinary API logs.
+model PensionEvidence {
+  id                String                @id @default(uuid()) @db.Uuid
+  pensionCaseId     String                @db.Uuid
+  evidenceType      String                @db.VarChar(60)
+  documentReference String                @db.VarChar(255)
+  status            PensionEvidenceStatus @default(PENDING)
+  reviewNotes       String?               @db.VarChar(1000)
+  verifiedByUserId  String?               @db.Uuid
+  verifiedAt        DateTime?
+
+  pensionCase PensionCase @relation(fields: [pensionCaseId], references: [id], onDelete: Cascade)
+  verifiedBy  User?       @relation("PensionEvidenceVerifier", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pensionCaseId, evidenceType, status])
+  @@map("pension_evidence")
+}
+
+model PensionPaymentSchedule {
+  id            String                @id @default(uuid()) @db.Uuid
+  pensionCaseId String                @unique @db.Uuid
+  status        PensionScheduleStatus @default(SCHEDULED)
+  monthlyAmount Decimal               @db.Decimal(12, 2)
+  currency      String                @default("KES") @db.VarChar(3)
+  effectiveFrom DateTime              @db.Date
+  effectiveTo   DateTime?             @db.Date
+  activatedAt   DateTime?
+  stoppedAt     DateTime?
+
+  pensionCase PensionCase @relation(fields: [pensionCaseId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, effectiveFrom])
+  @@map("pension_payment_schedules")
+}
+
+model PensionCaseEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  pensionCaseId String    @db.Uuid
+  actorUserId   String?   @db.Uuid
+  action        String    @db.VarChar(60)
+  fromStatus    String?   @db.VarChar(40)
+  toStatus      String?   @db.VarChar(40)
+  effectiveDate DateTime? @db.Date
+  note          String?   @db.VarChar(1000)
+  createdAt     DateTime  @default(now())
+
+  pensionCase PensionCase @relation(fields: [pensionCaseId], references: [id], onDelete: Cascade)
+  actor       User?       @relation("PensionCaseEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([pensionCaseId, createdAt])
+  @@map("pension_case_events")
 }
 
 model AttendanceRecord {

@@ -5,7 +5,7 @@
   const loginView = $('#login-view');
   const appView = $('#app-view');
   const detailOverlay = $('#detail-overlay');
-  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], accounts: [], roles: [], organizations: [], page: 'workforce', selected: null, toastTimer: null, budgetCoachAvailable: false, budgetCoachConsent: false, coachHistory: [] };
+  const state = { token: sessionStorage.getItem(tokenKey), user: null, employeeAccount: false, employments: [], accounts: [], roles: [], organizations: [], page: 'workforce', selected: null, toastTimer: null, budgetCoachAvailable: false, budgetCoachConsent: false, coachHistory: [], pensionSchemes: [], pensionCases: [], selectedPensionCaseId: null };
 
   const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const fullName = (person = {}) => [person.firstName, person.middleName, person.lastName].filter(Boolean).join(' ') || 'Unnamed person';
@@ -66,6 +66,7 @@
     $('#search-input').placeholder = state.employeeAccount ? 'Search your employment records…' : 'Search name, number, organization…';
     $('#today-date').textContent = new Intl.DateTimeFormat('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date());
     $('#nav-accounts').classList.toggle('hidden', !user.permissions?.includes('users.read'));
+    $('#nav-pensions').classList.toggle('hidden', !user.permissions?.includes('pensions.read'));
     setPage('workforce');
     loadEmployments();
     if (state.employeeAccount) {
@@ -77,12 +78,16 @@
   function setPage(page) {
     state.page = page;
     const accountsPage = page === 'accounts';
+    const pensionsPage = page === 'pensions';
     $('#workforce-heading').classList.toggle('hidden', accountsPage);
-    $('#workforce-view').classList.toggle('hidden', accountsPage);
+    $('#workforce-heading').classList.toggle('hidden', pensionsPage);
+    $('#workforce-view').classList.toggle('hidden', accountsPage || pensionsPage);
     $('#accounts-view').classList.toggle('hidden', !accountsPage);
-    $('#nav-item').classList.toggle('active', !accountsPage);
+    $('#pensions-view').classList.toggle('hidden', !pensionsPage);
+    $('#nav-item').classList.toggle('active', !accountsPage && !pensionsPage);
+    $('#nav-pensions').classList.toggle('active', pensionsPage);
     $('#nav-accounts').classList.toggle('active', accountsPage && state.user?.permissions?.includes('users.read'));
-    $('#breadcrumb-title').textContent = accountsPage
+    $('#breadcrumb-title').textContent = pensionsPage ? 'Pension cases' : accountsPage
       ? (state.user?.permissions?.includes('users.read') ? 'Account management' : 'My account')
       : (state.employeeAccount ? 'My employment' : 'Staff records');
     $('#accounts-title').textContent = state.user?.permissions?.includes('users.read')
@@ -98,6 +103,7 @@
       loadMyAccount();
       if (state.user?.permissions?.includes('users.read')) loadAccountDirectory();
     }
+    if (pensionsPage) loadPensionPage();
   }
 
   async function loadAttendance() {
@@ -523,6 +529,111 @@
     }
   }
 
+  async function loadPensionPage() {
+    const error = $('#pension-error');
+    error.classList.add('hidden');
+    $('#pension-case-count').textContent = 'Loading pension cases…';
+    try {
+      const [cases, schemes] = await Promise.all([api('/pensions/cases'), api('/pensions/schemes')]);
+      state.pensionCases = Array.isArray(cases) ? cases : [];
+      state.pensionSchemes = Array.isArray(schemes) ? schemes : [];
+      if (state.user?.permissions?.includes('pensions.manage')) {
+        const organizations = await api('/organizations');
+        state.organizations = Array.isArray(organizations) ? organizations : [];
+        $('#pension-scheme-panel').classList.remove('hidden');
+        $('#pension-scheme-form [name="organizationId"]').innerHTML = `<option value="">Choose organization</option>${state.organizations.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('')}`;
+      } else $('#pension-scheme-panel').classList.add('hidden');
+      $('#pension-case-panel').classList.toggle('hidden', !state.user?.permissions?.includes('pensions.create'));
+      const employmentRows = state.employments.length ? state.employments : await api('/employments');
+      state.employments = Array.isArray(employmentRows) ? employmentRows : [];
+      const employmentSelect = $('#pension-case-form [name="employmentId"]');
+      employmentSelect.innerHTML = `<option value="">Choose employee</option>${state.employments.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(fullName(item.person))} · ${escapeHtml(item.employmentNumber)} · ${escapeHtml(item.organization?.name || '')}</option>`).join('')}`;
+      $('#pension-case-form [name="schemeId"]').innerHTML = `<option value="">Choose scheme</option>${state.pensionSchemes.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('')}`;
+      renderPensionCases();
+      if (state.selectedPensionCaseId) renderPensionDetail(state.selectedPensionCaseId);
+    } catch (failure) {
+      if (failure.status === 401) return showLogin();
+      error.textContent = failure.message;
+      error.classList.remove('hidden');
+      $('#pension-case-count').textContent = 'Pension cases could not be loaded';
+    }
+  }
+
+  function renderPensionCases() {
+    $('#pension-case-count').textContent = `${state.pensionCases.length} case${state.pensionCases.length === 1 ? '' : 's'} in your access scope`;
+    $('#pension-empty').classList.toggle('hidden', state.pensionCases.length > 0);
+    $('#pension-cases-body').innerHTML = state.pensionCases.map((item) => `<tr data-pension-case-id="${escapeHtml(item.id)}" tabindex="0"><td>${escapeHtml(fullName(item.employment.person))}<small class="pension-sub">${escapeHtml(item.employment.employmentNumber)}</small></td><td>${escapeHtml(item.employment.organization.name)}</td><td>${escapeHtml(item.scheme.name)}</td><td>${escapeHtml(dateLabel(item.retirementDate))}</td><td><span class="status-pill">${escapeHtml(item.status.replaceAll('_', ' '))}</span></td><td>${escapeHtml(item.schedule?.status?.replaceAll('_', ' ') || 'Not approved')}</td></tr>`).join('');
+  }
+
+  function renderPensionDetail(caseId) {
+    const item = state.pensionCases.find((record) => record.id === caseId);
+    const panel = $('#pension-detail');
+    if (!item) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    const permissions = new Set(state.user?.permissions || []);
+    const actionButton = (action, label, cls = 'secondary-button') => `<button class="${cls}" type="button" data-pension-action="${action}" data-case-id="${escapeHtml(item.id)}">${label}</button>`;
+    const evidence = (item.evidence || []).map((record) => `<div class="pension-evidence-row"><span><strong>${escapeHtml(record.evidenceType.replaceAll('_', ' '))}</strong><small>Reference: ${escapeHtml(record.documentReference)} · ${escapeHtml(record.status)}</small>${record.reviewNotes ? `<small>${escapeHtml(record.reviewNotes)}</small>` : ''}</span>${record.status === 'PENDING' && record.evidenceType !== 'DEATH_CERTIFICATE' && permissions.has('pensions.review') ? `${actionButton(`verify-evidence:${record.id}`, 'Verify')}${actionButton(`reject-evidence:${record.id}`, 'Reject')}` : ''}</div>`).join('') || '<p class="muted">No evidence references recorded.</p>';
+    let actions = '';
+    if (item.status === 'DRAFT' && permissions.has('pensions.create')) actions += actionButton('submit-case', 'Submit case', 'primary-button');
+    if (item.status === 'SUBMITTED' && permissions.has('pensions.review')) actions += actionButton('begin-review', 'Start review', 'primary-button');
+    if (item.status === 'UNDER_REVIEW' && permissions.has('pensions.approve')) actions += actionButton('approve-case', 'Approve and schedule', 'primary-button') + actionButton('reject-case', 'Reject case');
+    if (item.status === 'APPROVED' && permissions.has('pensions.review')) actions += actionButton('report-death', 'Report pensioner death');
+    if (item.status === 'DEATH_REPORTED' && permissions.has('pensions.death.review')) actions += actionButton('verify-death', 'Verify death and stop schedule', 'primary-button') + actionButton('reject-death', 'Reject report and restore schedule');
+    const schedule = item.schedule ? `<div class="pension-schedule"><strong>Payment schedule: ${escapeHtml(item.schedule.status.replaceAll('_', ' '))}</strong><span>${escapeHtml(moneyLabel(item.schedule.monthlyAmount, item.schedule.currency))} monthly from ${escapeHtml(dateLabel(item.schedule.effectiveFrom))}${item.schedule.effectiveTo ? ` until ${escapeHtml(dateLabel(item.schedule.effectiveTo))}` : ''}</span><small>This is a recorded schedule only; no funds are transferred by this system.</small></div>` : '<p class="muted">No payment schedule until an authorized officer approves the case.</p>';
+    const canAddEvidence = permissions.has('pensions.create') && ['DRAFT', 'SUBMITTED', 'UNDER_REVIEW'].includes(item.status);
+    panel.innerHTML = `<div class="records-heading"><div><p class="eyebrow">CASE DETAILS</p><h2>${escapeHtml(fullName(item.employment.person))} · ${escapeHtml(item.employment.employmentNumber)}</h2><p class="muted">${escapeHtml(item.employment.organization.name)} · ${escapeHtml(item.scheme.name)}</p></div><button id="close-pension-detail" class="secondary-button" type="button">Close</button></div><div class="pension-detail-grid"><div><span>Case status</span><strong>${escapeHtml(item.status.replaceAll('_', ' '))}</strong></div><div><span>Employment status</span><strong>${escapeHtml(item.employment.status.replaceAll('_', ' '))}</strong></div><div><span>Retirement date</span><strong>${escapeHtml(dateLabel(item.retirementDate))}</strong></div><div><span>Survivor claim review</span><strong>${escapeHtml(item.survivorClaimStatus.replaceAll('_', ' '))}</strong></div></div>${schedule}<div class="pension-section"><h3>Supporting evidence</h3><p class="muted">References only. Store documents in your approved secure records system and verify them there.</p>${evidence}${canAddEvidence ? `<form id="pension-evidence-form" class="pension-form compact" data-case-id="${escapeHtml(item.id)}"><label>Evidence type<select name="evidenceType"><option value="RETIREMENT_NOTICE">Retirement notice</option><option value="SERVICE_RECORD">Service record</option><option value="IDENTITY">Identity verification</option><option value="BENEFICIARY_NOMINATION">Beneficiary nomination</option><option value="OTHER">Other scheme evidence</option></select></label><label>Secure document reference<input name="documentReference" maxlength="255" required placeholder="Reference in approved document store" /></label><button class="secondary-button" type="submit">Add evidence reference</button><p class="form-feedback" role="status"></p></form>` : ''}</div>${item.deathReportedAt ? `<div class="pension-alert"><strong>Death report ${item.status === 'DEATH_REPORTED' ? 'awaiting verification' : item.deathReviewedAt ? `reviewed ${escapeHtml(dateLabel(item.deathReviewedAt))}` : ''}</strong><p>Effective date: ${escapeHtml(dateLabel(item.deathEffectiveDate))}. Certificate reference: ${escapeHtml(item.deathCertificateRef)}.</p>${item.deathReviewNotes ? `<p>${escapeHtml(item.deathReviewNotes)}</p>` : ''}</div>` : ''}<div class="pension-actions">${actions}</div><div class="pension-section"><h3>Case history</h3><ul class="pension-events">${(item.events || []).map((event) => `<li><strong>${escapeHtml(event.action.replaceAll('_', ' '))}</strong><span>${escapeHtml(dateLabel(event.createdAt))} · ${escapeHtml(event.actor.fullName)}</span>${event.note ? `<small>${escapeHtml(event.note)}</small>` : ''}</li>`).join('')}</ul></div>`;
+  }
+
+  async function refreshSelectedPensionCase(caseId) {
+    state.selectedPensionCaseId = caseId;
+    await loadPensionPage();
+    renderPensionDetail(caseId);
+  }
+
+  async function handlePensionAction(button) {
+    const caseId = button.dataset.caseId;
+    const action = button.dataset.pensionAction;
+    try {
+      if (action === 'submit-case') await api(`/pensions/cases/${caseId}/submit`, { method: 'POST', body: '{}' });
+      if (action === 'begin-review') await api(`/pensions/cases/${caseId}/review`, { method: 'POST', body: JSON.stringify({ notes: 'Review started in pension administration.' }) });
+      if (action === 'approve-case') {
+        const amount = window.prompt('Enter the approved monthly amount from the official pension decision:');
+        if (amount === null) return;
+        const reference = window.prompt('Enter the approval or pension authority reference:');
+        if (reference === null) return;
+        await api(`/pensions/cases/${caseId}/approve`, { method: 'POST', body: JSON.stringify({ approvedMonthlyAmount: Number(amount), approvalReference: reference.trim() }) });
+      }
+      if (action === 'reject-case') {
+        const reason = window.prompt('Reason for rejecting this case:');
+        if (reason === null) return;
+        await api(`/pensions/cases/${caseId}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+      }
+      if (action.startsWith('verify-evidence:') || action.startsWith('reject-evidence:')) {
+        const decision = action.startsWith('verify-') ? 'VERIFIED' : 'REJECTED';
+        const evidenceId = action.split(':')[1];
+        const notes = window.prompt(`${decision === 'VERIFIED' ? 'Verification' : 'Rejection'} note (confirm you checked the original document in the approved store):`);
+        if (notes === null) return;
+        await api(`/pensions/cases/${caseId}/evidence/${evidenceId}/review`, { method: 'POST', body: JSON.stringify({ decision, notes }) });
+      }
+      if (action === 'report-death') {
+        const date = window.prompt('Death effective date (YYYY-MM-DD):');
+        if (date === null) return;
+        const reference = window.prompt('Reference for the death certificate in the approved secure document store:');
+        if (reference === null) return;
+        await api(`/pensions/cases/${caseId}/death-report`, { method: 'POST', body: JSON.stringify({ deathEffectiveDate: date, deathCertificateReference: reference }) });
+      }
+      if (action === 'verify-death' || action === 'reject-death') {
+        const decision = action === 'verify-death' ? 'VERIFIED' : 'REJECTED';
+        const notes = window.prompt(decision === 'VERIFIED' ? 'Record how the death certificate and identity were independently verified:' : 'Reason the death report was rejected:');
+        if (notes === null) return;
+        if (!window.confirm(decision === 'VERIFIED' ? 'Confirm: this will stop the pensioner’s payment schedule and flag a dependant claim for separate review.' : 'Confirm: this will reject the death report and restore the pension schedule if its effective date has arrived.')) return;
+        await api(`/pensions/cases/${caseId}/death-review`, { method: 'POST', body: JSON.stringify({ decision, notes }) });
+      }
+      toast('Pension case updated.');
+      await refreshSelectedPensionCase(caseId);
+    } catch (error) { toast(error.message, true); }
+  }
+
   const budgetCategories = [
     ['HOUSING', 'Housing / rent'], ['FOOD', 'Food'], ['UTILITIES', 'Utilities'],
     ['TRANSPORT', 'Transport'], ['FAMILY_SUPPORT', 'Family support'], ['HEALTH', 'Health'],
@@ -937,6 +1048,94 @@
     state.toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
   }
 
+  $('#pension-scheme-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $('#pension-scheme-feedback');
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    feedback.textContent = '';
+    try {
+      const body = Object.fromEntries(new FormData(form).entries());
+      body.requiredEvidenceTypes = [...form.elements.requiredEvidenceTypes.selectedOptions].map((option) => option.value);
+      await api('/pensions/schemes', { method: 'POST', body: JSON.stringify(body) });
+      form.reset();
+      toast('Pension scheme saved.');
+      await loadPensionPage();
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  $('#pension-case-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const feedback = $('#pension-case-feedback');
+    const button = form.querySelector('[type="submit"]');
+    const body = Object.fromEntries(new FormData(form).entries());
+    for (const key of ['qualifyingServiceYears', 'proposedMonthlyAmount']) {
+      if (body[key] === '') delete body[key];
+      else if (body[key] !== undefined) body[key] = Number(body[key]);
+    }
+    button.disabled = true;
+    feedback.textContent = '';
+    try {
+      const created = await api('/pensions/cases', { method: 'POST', body: JSON.stringify(body) });
+      form.reset();
+      form.elements.currency.value = 'KES';
+      state.selectedPensionCaseId = created.id;
+      toast('Draft pension case opened.');
+      await loadPensionPage();
+      renderPensionDetail(created.id);
+    } catch (error) { feedback.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  $('#pension-cases-body').addEventListener('click', (event) => {
+    const row = event.target.closest('[data-pension-case-id]');
+    if (row) { state.selectedPensionCaseId = row.dataset.pensionCaseId; renderPensionDetail(state.selectedPensionCaseId); }
+  });
+  $('#pension-cases-body').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      const row = event.target.closest('[data-pension-case-id]');
+      if (row) { event.preventDefault(); state.selectedPensionCaseId = row.dataset.pensionCaseId; renderPensionDetail(state.selectedPensionCaseId); }
+    }
+  });
+  $('#pension-detail').addEventListener('click', async (event) => {
+    if (event.target.id === 'close-pension-detail') {
+      state.selectedPensionCaseId = null;
+      $('#pension-detail').classList.add('hidden');
+      return;
+    }
+    const action = event.target.closest('[data-pension-action]');
+    if (action) await handlePensionAction(action);
+  });
+  $('#pension-detail').addEventListener('submit', async (event) => {
+    const form = event.target;
+    if (form.id !== 'pension-evidence-form') return;
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    const feedback = form.querySelector('.form-feedback');
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      await api(`/pensions/cases/${form.dataset.caseId}/evidence`, { method: 'POST', body: JSON.stringify(body) });
+      await refreshSelectedPensionCase(form.dataset.caseId);
+      toast('Evidence reference added.');
+    } catch (error) { feedback.textContent = error.message; button.disabled = false; }
+  });
+  $('#pension-detail').addEventListener('submit', async (event) => {
+    const form = event.target;
+    if (form.id !== 'pension-death-report-form') return;
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    const feedback = form.querySelector('.form-feedback');
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      await api(`/pensions/cases/${form.dataset.caseId}/death-report`, { method: 'POST', body: JSON.stringify(body) });
+      await refreshSelectedPensionCase(form.dataset.caseId);
+      toast('Schedule suspended pending death verification.');
+    } catch (error) { feedback.textContent = error.message; button.disabled = false; }
+  });
+
   $('#login-form').addEventListener('submit', login);
   $('#register-form').addEventListener('submit', registerEmployee);
   $('#show-register').addEventListener('click', () => {
@@ -951,6 +1150,7 @@
   });
   $('#search-input').addEventListener('input', renderRecords);
   $('#nav-item').addEventListener('click', () => setPage('workforce'));
+  $('#nav-pensions').addEventListener('click', () => setPage('pensions'));
   $('#nav-accounts').addEventListener('click', () => setPage('accounts'));
   $('#my-account-button').addEventListener('click', () => setPage(state.page === 'accounts' ? 'workforce' : 'accounts'));
   $('#account-search').addEventListener('input', renderAccountDirectory);
@@ -966,6 +1166,7 @@
   $('#coach-start').addEventListener('click', startBudgetCoach);
   $('#coach-form').addEventListener('submit', sendBudgetCoachQuestion);
   $('#coach-end').addEventListener('click', endBudgetCoach);
+  $('#refresh-pensions').addEventListener('click', loadPensionPage);
   $('#profile-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector('[type="submit"]');
