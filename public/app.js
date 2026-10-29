@@ -209,9 +209,10 @@
     try {
       if (state.employeeAccount) {
         const portal = await api('/auth/me/employee');
-        state.employments = (portal.employments || []).map((employment) => ({
+        const employee = portal.person || {};
+        state.employments = (portal.employments || employee.employments || []).map((employment) => ({
           ...employment,
-          person: portal.person,
+          person: employee,
         }));
         renderMyPay();
       } else {
