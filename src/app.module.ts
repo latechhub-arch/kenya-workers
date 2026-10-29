@@ -12,6 +12,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuditInterceptor } from './audit/audit.interceptor';
 import { CompensationModule } from './compensation/compensation.module';
 import { AttendanceModule } from './attendance/attendance.module';
+import { PayrollModule } from './payroll/payroll.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AttendanceModule } from './attendance/attendance.module';
     AuditModule,
     CompensationModule,
     AttendanceModule,
+    PayrollModule,
   ],
   providers: [{ provide: APP_INTERCEPTOR, useClass: AuditInterceptor }],
 })

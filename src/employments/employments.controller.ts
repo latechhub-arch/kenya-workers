@@ -89,6 +89,24 @@ export class EmploymentsController {
     );
   }
 
+  @Get(':id/compensation/progression')
+  @RequirePermissions('employmentCompensation.read')
+  previewAnnualProgression(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.employmentsService.previewAnnualProgression(id, request.user);
+  }
+
+  @Post(':id/compensation/progression')
+  @RequirePermissions('employmentCompensation.assign')
+  applyAnnualProgression(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.employmentsService.applyAnnualProgression(id, request.user);
+  }
+
   @Post(':id/postings')
   @RequirePermissions('postings.create')
   async createPosting(

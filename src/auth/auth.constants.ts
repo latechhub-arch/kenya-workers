@@ -34,6 +34,9 @@ export const PERMISSIONS = [
   'compensation.update',
   'employmentCompensation.read',
   'employmentCompensation.assign',
+  'payroll.read',
+  'payroll.manage',
+  'payroll.self.read',
 ] as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[number];

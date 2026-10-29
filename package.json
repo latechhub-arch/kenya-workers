@@ -12,7 +12,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "prisma migrate deploy && node dist/main",
     "mobile:web": "vite build --config mobile/vite.config.mjs --configLoader runner",
     "mobile:sync": "npm run mobile:web && cap sync android",
     "mobile:open": "cap open android",

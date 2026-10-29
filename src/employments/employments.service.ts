@@ -1357,6 +1357,86 @@ export class EmploymentsService {
     }
   }
 
+  async previewAnnualProgression(id: string, user: AuthenticatedUser) {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const employment = await this.prisma.employment.findUnique({
+      where: { id },
+      select: { id: true, organizationId: true, status: true, startDate: true, endDate: true },
+    });
+    if (!employment) throw new NotFoundException('Employment not found');
+    assertOrganizationPermission(user, employment.organizationId, 'employmentCompensation.read');
+    if (employment.status !== EmploymentStatus.ACTIVE) {
+      return { eligible: false, reason: 'Employment is not active' };
+    }
+
+    const latest = await this.prisma.employmentCompensationAssignment.findFirst({
+      where: {
+        employmentId: id,
+        effectiveFrom: { lte: today },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+      },
+      orderBy: { effectiveFrom: 'desc' },
+      include: { compensationStep: { include: { jobLevel: true, compensationScale: true } } },
+    });
+    if (!latest) return { eligible: false, reason: 'No current compensation assignment is recorded' };
+
+    const dueDate = new Date(latest.effectiveFrom);
+    dueDate.setUTCFullYear(dueDate.getUTCFullYear() + 1);
+    if (dueDate.getUTCMonth() !== latest.effectiveFrom.getUTCMonth()) {
+      dueDate.setUTCDate(0);
+    }
+    const currentPosition = await this.prisma.employmentPositionAssignment.findFirst({
+      where: { employmentId: id, effectiveFrom: { lte: today }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] },
+      orderBy: { effectiveFrom: 'desc' },
+      select: { position: { select: { levelId: true, level: { select: { title: true } } } } },
+    });
+    const duePosition = await this.prisma.employmentPositionAssignment.findFirst({
+      where: { employmentId: id, effectiveFrom: { lte: dueDate }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: dueDate } }] },
+      orderBy: { effectiveFrom: 'desc' },
+      select: { position: { select: { levelId: true } } },
+    });
+    const levelId = latest.compensationStep.jobLevelId;
+    if (!currentPosition || !duePosition || currentPosition.position.levelId !== levelId || duePosition.position.levelId !== levelId) {
+      return { eligible: false, reason: 'Annual progression requires the employee to remain in the same assigned rank through the anniversary date', dueDate };
+    }
+    const steps = await this.prisma.compensationStep.findMany({
+      where: { compensationScaleId: latest.compensationStep.compensationScaleId, jobLevelId: levelId },
+      orderBy: { stepNumber: 'asc' },
+      select: { id: true, stepNumber: true, basicSalary: true },
+    });
+    const maxStep = steps.at(-1);
+    const nextStep = steps.find((step) => step.stepNumber === latest.compensationStep.stepNumber + 1);
+    if (!maxStep || !nextStep) {
+      return { eligible: false, atLimit: true, reason: 'The employee is already at the highest configured step for this rank', rank: latest.compensationStep.jobLevel.title, currentStep: latest.compensationStep.stepNumber, maxStep: maxStep?.stepNumber ?? latest.compensationStep.stepNumber, dueDate };
+    }
+    if (dueDate > today) {
+      return { eligible: false, reason: 'The annual increment is not due yet', rank: latest.compensationStep.jobLevel.title, currentStep: latest.compensationStep.stepNumber, nextStep: nextStep.stepNumber, maxStep: maxStep.stepNumber, dueDate };
+    }
+    if (employment.endDate && dueDate > employment.endDate) {
+      return { eligible: false, reason: 'The anniversary falls after the employment end date', dueDate };
+    }
+    return { eligible: true, dueDate, rank: latest.compensationStep.jobLevel.title, currentStep: latest.compensationStep.stepNumber, nextStep: nextStep.stepNumber, maxStep: maxStep.stepNumber, currentBasicSalary: latest.compensationStep.basicSalary, nextBasicSalary: nextStep.basicSalary, compensationStepId: nextStep.id };
+  }
+
+  async applyAnnualProgression(id: string, user: AuthenticatedUser) {
+    const employment = await this.prisma.employment.findUnique({
+      where: { id },
+      select: { organizationId: true },
+    });
+    if (!employment) throw new NotFoundException('Employment not found');
+    assertOrganizationPermission(user, employment.organizationId, 'employmentCompensation.assign');
+    const preview = await this.previewAnnualProgression(id, user);
+    if (!preview.eligible || !preview.compensationStepId || !preview.dueDate) {
+      throw new ConflictException(preview.reason || 'Annual progression is not available');
+    }
+    return this.createCompensationAssignment(id, {
+      compensationStepId: preview.compensationStepId,
+      effectiveFrom: preview.dueDate.toISOString().slice(0, 10),
+      reason: `Annual step increment within ${preview.rank}; reviewed and applied by ${user.fullName}`,
+    }, user);
+  }
+
   private dateOnly(value: string, fieldName: string) {
     const match = /^\d{4}-\d{2}-\d{2}$/.exec(value);
     if (!match) {

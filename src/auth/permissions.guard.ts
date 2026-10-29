@@ -18,6 +18,13 @@ export class PermissionsGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const granted = new Set(request.user.permissionCodes);
+    if (
+      required.length === 1 &&
+      required[0] === 'payroll.self.read' &&
+      request.user.personId
+    ) {
+      return true;
+    }
     if (!required.every((permission) => granted.has(permission))) {
       throw new ForbiddenException('You do not have permission to perform this action');
     }

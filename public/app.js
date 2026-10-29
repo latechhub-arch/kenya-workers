@@ -54,6 +54,7 @@
     loginView.classList.add('hidden');
     appView.classList.remove('hidden');
     $('#attendance-card').classList.toggle('hidden', !state.employeeAccount);
+    $('#my-pay-card').classList.toggle('hidden', !state.employeeAccount);
     $('#nav-title').textContent = state.employeeAccount ? 'My employment' : 'Staff records';
     $('#page-title').textContent = state.employeeAccount ? 'My employment' : 'Staff records';
     $('#page-description').textContent = state.employeeAccount ? 'Your employment details and important work history.' : 'Search and review employment details within your access.';
@@ -212,6 +213,7 @@
           ...employment,
           person: portal.person,
         }));
+        renderMyPay();
       } else {
         state.employments = await api('/employments');
         if (!Array.isArray(state.employments)) state.employments = state.employments?.value || [];
@@ -233,6 +235,67 @@
       return from <= today && (!to || to >= today);
     }) || employment.positionAssignments?.[0];
     return assignment?.position || null;
+  }
+
+  function dateKeyInKenya() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Africa/Nairobi',
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function currentDatedRecord(items) {
+    const today = dateKeyInKenya();
+    return (items || []).filter((item) => {
+      const from = String(item.effectiveFrom || '').slice(0, 10);
+      const to = item.effectiveTo ? String(item.effectiveTo).slice(0, 10) : null;
+      return from <= today && (!to || to >= today);
+    }).sort((a, b) => String(b.effectiveFrom).localeCompare(String(a.effectiveFrom)))[0] || null;
+  }
+
+  function renderMyPay() {
+    const card = $('#my-pay-card');
+    if (!card || !state.employeeAccount) return;
+    const current = state.employments
+      .filter((employment) => employment.status === 'ACTIVE')
+      .map((employment) => ({ employment, assignment: currentDatedRecord(employment.compensationAssignments) }))
+      .filter(({ assignment }) => assignment);
+    const content = $('#my-pay-content');
+    if (!current.length) {
+      content.innerHTML = '<div class="pay-empty"><strong>No current compensation record</strong><p>Your assigned pay grade and step will appear here after HR records them.</p></div><p class="pay-disclaimer">This page shows assigned compensation information. A finalized payslip with allowances, deductions, and take-home pay will appear only when payroll data is available.</p>';
+    } else {
+      content.innerHTML = current.map(({ employment, assignment }) => {
+        const step = assignment.compensationStep || {};
+        const scale = step.compensationScale || {};
+        const rank = step.jobLevel?.title || 'Grade unavailable';
+        const amount = moneyLabel(step.basicSalary, scale.currency || 'KES');
+        const provisional = Boolean(scale.isProvisional);
+        return `<article class="pay-summary"><div class="pay-summary-top"><div><span class="pay-label">${escapeHtml(employment.organization?.name || 'Employment')}</span><h3>${escapeHtml(rank)} <span>· Step ${escapeHtml(step.stepNumber ?? '—')}</span></h3></div><span class="pay-badge ${provisional ? 'provisional' : ''}">${provisional ? 'PROVISIONAL' : 'ASSIGNED'}</span></div><div class="pay-amount-label">Assigned basic pay</div><div class="pay-amount">${escapeHtml(amount)}</div><div class="pay-meta"><span>${escapeHtml(scale.name || 'Compensation scale')}</span><span>Effective ${escapeHtml(dateLabel(assignment.effectiveFrom))}</span></div>${provisional ? '<p class="pay-provisional-note">Assumed scale figure. This is not an approved or payable salary amount.</p>' : ''}</article>`;
+      }).join('') + '<p class="pay-disclaimer">This is your assigned basic compensation record, not a payslip. It does not include allowances, deductions, or net pay.</p>';
+    }
+    content.insertAdjacentHTML('beforeend', '<section class="payslip-list"><div class="pay-heading"><div><p class="eyebrow">PAY HISTORY</p><h3>My payslips</h3></div></div><div id="my-payslips-content"><p class="muted">Loading payslips…</p></div></section>');
+    loadMyPayslips();
+  }
+
+  async function loadMyPayslips() {
+    const target = $('#my-payslips-content');
+    if (!target || !state.employeeAccount) return;
+    try {
+      const slips = await api('/payroll/me/payslips');
+      if (!Array.isArray(slips) || !slips.length) {
+        target.innerHTML = '<p class="muted">No finalized payslips are available yet.</p>';
+        return;
+      }
+      target.innerHTML = slips.map((slip) => {
+        const month = new Intl.DateTimeFormat('en-KE', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(slip.periodYear, slip.periodMonth - 1, 1)));
+        const rows = (slip.lines || []).map((line) => `<div class="payslip-line"><span>${escapeHtml(line.title)}${line.balance != null ? `<small>Balance ${escapeHtml(moneyLabel(line.balance, slip.currency))}</small>` : ''}</span><span>${escapeHtml(moneyLabel(line.amount, slip.currency))}</span></div>`).join('');
+        return `<details class="payslip-item"><summary><span><strong>${escapeHtml(month)}</strong><small>Issued ${escapeHtml(dateLabel(slip.issuedAt))}</small></span><span class="payslip-net">${escapeHtml(moneyLabel(slip.netPay, slip.currency))}<small>Net pay</small></span></summary><div class="payslip-lines">${slip.isProvisional ? '<p class="pay-provisional-note">DEMO estimate based on a provisional scale. Not approved or payable.</p>' : ''}${rows}<div class="payslip-total"><span>Total earnings</span><strong>${escapeHtml(moneyLabel(slip.earningsTotal, slip.currency))}</strong></div><div class="payslip-total"><span>Total deductions</span><strong>${escapeHtml(moneyLabel(slip.deductionsTotal, slip.currency))}</strong></div><div class="payslip-total net"><span>Net pay</span><strong>${escapeHtml(moneyLabel(slip.netPay, slip.currency))}</strong></div>${slip.correctionReason ? `<p class="muted">Correction: ${escapeHtml(slip.correctionReason)}</p>` : ''}</div></details>`;
+      }).join('');
+    } catch (error) {
+      if (error.status === 401) return showLogin();
+      target.innerHTML = `<p class="muted">Payslips could not be loaded: ${escapeHtml(error.message)}</p>`;
+    }
   }
 
   function filteredRecords() {
@@ -285,11 +348,13 @@
     return `<div class="timeline">${items.map(renderItem).join('')}</div>`;
   }
 
-  function renderEmploymentDetails(employment, postings, positions, compensation) {
+  function renderEmploymentDetails(employment, postings, positions, compensation, payrollComponents = null, payrollSlips = null) {
     const name = fullName(employment.person);
     const postingsAllowed = postings !== null;
     const positionsAllowed = positions !== null;
     const compensationAllowed = compensation !== null;
+    const payrollReadable = payrollComponents !== null;
+    const mayManagePayroll = !state.employeeAccount && state.user?.permissions?.includes('payroll.manage');
     const postingRows = postings || [];
     const positionRows = positions || [];
     const compensationRows = compensation || [];
@@ -325,12 +390,17 @@
     }, 'No compensation history recorded.');
     const mayInvite = !state.employeeAccount && state.user?.permissions?.includes('employeeAccounts.invite');
     const inviteSection = mayInvite ? recordSection('Employee portal access', `<p class="muted invite-copy">Create a one-time activation link for this employee. Share it with them through an approved channel; it expires after 72 hours.</p><button id="invite-employee-button" class="secondary-button" type="button">Create activation link</button><div id="invite-result" class="invite-result hidden"></div>`) : '';
+    const payrollRows = payrollReadable ? renderTimeline((payrollComponents || []).slice().sort((a, b) => new Date(b.effectiveFrom) - new Date(a.effectiveFrom)), (item) => `<div class="timeline-item"><div class="timeline-date">${dateLabel(item.effectiveFrom)}<br />to ${item.effectiveTo ? dateLabel(item.effectiveTo) : 'Current'}</div><div><div class="timeline-title">${escapeHtml(item.title)} · ${escapeHtml(item.type)}</div><div class="timeline-sub">${escapeHtml(moneyLabel(item.amount, item.currency))}${item.frequency === 'MONTHLY' ? ' monthly' : ' once'}${item.balance != null ? ` · balance ${escapeHtml(moneyLabel(item.balance, item.currency))}` : ''}</div>${item.note ? `<div class="timeline-reason">${escapeHtml(item.note)}</div>` : ''}${mayManagePayroll && !item.effectiveTo ? `<button class="secondary-button close-pay-component" data-component-id="${escapeHtml(item.id)}" type="button">End this pay item</button>` : ''}</div></div>`, 'No pay components recorded.') : '';
+    const payslipHistory = payrollReadable ? (!(payrollSlips || []).length ? '<p class="muted">No payslips have been issued.</p>' : (payrollSlips || []).map((slip) => `<details class="payslip-item"><summary><span><strong>${escapeHtml(new Intl.DateTimeFormat('en-KE', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(slip.periodYear, slip.periodMonth - 1, 1))))} · Version ${escapeHtml(slip.version)}</strong><small>${escapeHtml(slip.status)} · Issued ${escapeHtml(dateLabel(slip.issuedAt))}${slip.isProvisional ? ' · PROVISIONAL' : ''}</small></span><span class="payslip-net">${escapeHtml(moneyLabel(slip.netPay, slip.currency))}<small>Net pay</small></span></summary><div class="payslip-lines">${(slip.lines || []).map((line) => `<div class="payslip-line"><span>${escapeHtml(line.title)}</span><span>${escapeHtml(moneyLabel(line.amount, slip.currency))}</span></div>`).join('')}<div class="payslip-total"><span>Earnings</span><strong>${escapeHtml(moneyLabel(slip.earningsTotal, slip.currency))}</strong></div><div class="payslip-total"><span>Deductions</span><strong>${escapeHtml(moneyLabel(slip.deductionsTotal, slip.currency))}</strong></div>${slip.correctionReason ? `<p class="muted">Correction: ${escapeHtml(slip.correctionReason)}</p>` : ''}</div></details>`).join('')) : '';
+    const payrollForm = mayManagePayroll ? `<div class="payroll-admin"><h4>Update a pay item</h4><p class="muted">Updates take effect from the selected date. Previous versions and issued payslips remain in the record.</p><form id="pay-component-form" class="payroll-form"><label>Code<input name="code" required pattern="[A-Z0-9_-]+" maxlength="50" placeholder="e.g. HOUSING_ALLOWANCE"></label><label>Item name<input name="title" required maxlength="255" placeholder="e.g. Housing allowance"></label><label>Type<select name="type"><option value="EARNING">Earning</option><option value="DEDUCTION">Deduction</option></select></label><label>Frequency<select name="frequency"><option value="MONTHLY">Monthly</option><option value="ONE_OFF">One time</option></select></label><label>Amount in KES<input name="amount" type="number" min="0.01" step="0.01" required></label><label>Remaining balance (optional)<input name="balance" type="number" min="0" step="0.01"></label><label>Effective from<input name="effectiveFrom" type="date" required value="${dateKeyInKenya()}"></label><label class="wide">Note<input name="note" maxlength="500" placeholder="Optional admin note"></label><button class="secondary-button" type="submit">Save pay item</button></form><h4>Issue monthly payslip</h4><form id="payslip-form" class="payroll-form"><label>Pay period<input name="period" type="month" required value="${dateKeyInKenya().slice(0, 7)}"></label><label class="wide">Correction reason (only when replacing a slip)<input name="correctionReason" maxlength="500" placeholder="Leave blank for the first issue"></label><button class="primary-button" type="submit">Prepare and issue payslip</button></form><h4>Annual step progression</h4><p id="progression-result" class="muted">Review the employee’s anniversary eligibility before applying an increment.</p><button id="progression-preview" class="secondary-button" type="button">Check annual increment</button></div>` : '';
+    const payrollSection = payrollReadable ? recordSection('Payroll details', `${payrollRows}<h4>Payslip history</h4>${payslipHistory}${payrollForm}`) : '';
     return `<div class="detail-hero"><div class="detail-avatar">${escapeHtml(initials(name))}</div><div><h2 id="detail-name">${escapeHtml(name)}</h2><p>${escapeHtml(employment.employmentNumber)} · ${escapeHtml(employment.organization?.name || 'Organization unavailable')}</p></div><span class="status-pill detail-status ${employment.status === 'ACTIVE' ? '' : 'inactive'}">${escapeHtml(employment.status)}</span></div>
       ${recordSection('Employment details', baseDetails)}
       ${currentPosition ? recordSection('Current position', `<div class="detail-grid">${detailField('Rank / grade', currentPosition.level?.title || currentPosition.title)}${detailField('Position code', currentPosition.code)}${detailField('Framework', currentPosition.framework?.name)}${detailField('Authorized slots', currentPosition.authorizedSlots)}</div>`) : ''}
       ${positionsAllowed ? recordSection('Position history', positionsContent) : ''}
       ${postingsAllowed ? recordSection('Posting history', postingsContent) : ''}
       ${compensationAllowed ? recordSection('Compensation history', compensationContent) : ''}
+      ${payrollSection}
       ${inviteSection}`;
   }
 
@@ -387,17 +457,83 @@
         api(`/employments/${id}/postings`),
         api(`/employments/${id}/positions`),
         api(`/employments/${id}/compensation`),
+        api(`/payroll/employments/${id}/components`),
+        api(`/payroll/employments/${id}/payslips`),
       ]);
       const employment = requests[0].status === 'fulfilled' ? requests[0].value : baseRecord;
       if (requests[0].status === 'rejected' && requests[0].reason.status === 401) return showLogin();
       const postings = requests[1].status === 'fulfilled' ? requests[1].value : (requests[1].reason.status === 403 ? null : []);
       const positions = requests[2].status === 'fulfilled' ? requests[2].value : (requests[2].reason.status === 403 ? null : []);
       const compensation = requests[3].status === 'fulfilled' ? requests[3].value : (requests[3].reason.status === 403 ? null : []);
+      const payrollComponents = requests[4].status === 'fulfilled' ? requests[4].value : (requests[4].reason.status === 403 ? null : []);
+      const payrollSlips = requests[5].status === 'fulfilled' ? requests[5].value : (requests[5].reason.status === 403 ? null : []);
       if (requests.slice(1).some((request) => request.status === 'rejected' && request.reason.status === 401)) return showLogin();
       const normalize = (value) => Array.isArray(value) ? value : (value?.value || []);
-      $('#detail-content').innerHTML = renderEmploymentDetails(employment, postings === null ? null : normalize(postings), positions === null ? null : normalize(positions), compensation === null ? null : normalize(compensation));
+      $('#detail-content').innerHTML = renderEmploymentDetails(employment, postings === null ? null : normalize(postings), positions === null ? null : normalize(positions), compensation === null ? null : normalize(compensation), payrollComponents === null ? null : normalize(payrollComponents), payrollSlips === null ? null : normalize(payrollSlips));
       const inviteButton = $('#invite-employee-button');
       if (inviteButton) inviteButton.addEventListener('click', () => issueEmployeeInvite(employment.personId));
+      const componentForm = $('#pay-component-form');
+      if (componentForm) componentForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const data = new FormData(componentForm);
+        const body = Object.fromEntries(data.entries());
+        body.amount = Number(body.amount);
+        if (body.balance === '') delete body.balance; else body.balance = Number(body.balance);
+        try {
+          await api(`/payroll/employments/${id}/components`, { method: 'POST', body: JSON.stringify(body) });
+          toast('Pay item saved with its effective date.');
+          openDetails(id);
+        } catch (error) { toast(error.message, true); }
+      });
+      document.querySelectorAll('.close-pay-component').forEach((button) => button.addEventListener('click', async () => {
+        const effectiveTo = dateKeyInKenya();
+        if (!window.confirm(`End this pay item effective ${effectiveTo}? Existing payslips will remain unchanged.`)) return;
+        button.disabled = true;
+        try {
+          await api(`/payroll/components/${button.dataset.componentId}/close`, { method: 'PATCH', body: JSON.stringify({ effectiveTo }) });
+          toast('Pay item ended.');
+          openDetails(id);
+        } catch (error) { toast(error.message, true); button.disabled = false; }
+      }));
+      const payslipForm = $('#payslip-form');
+      if (payslipForm) payslipForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(payslipForm);
+        const [periodYear, periodMonth] = String(formData.get('period')).split('-').map(Number);
+        const correctionReason = String(formData.get('correctionReason') || '').trim();
+        try {
+          await api(`/payroll/employments/${id}/payslips`, { method: 'POST', body: JSON.stringify({ periodYear, periodMonth, ...(correctionReason ? { correctionReason } : {}) }) });
+          toast('Payslip issued and saved as a month-end snapshot.');
+          openDetails(id);
+        } catch (error) { toast(error.message, true); }
+      });
+      const progressionButton = $('#progression-preview');
+      if (progressionButton) progressionButton.addEventListener('click', async () => {
+        const output = $('#progression-result');
+        progressionButton.disabled = true;
+        try {
+          const preview = await api(`/employments/${id}/compensation/progression`);
+          output.textContent = preview.eligible
+            ? `${preview.rank}: Step ${preview.currentStep} → Step ${preview.nextStep}, effective ${dateLabel(preview.dueDate)}. Basic pay ${moneyLabel(preview.currentBasicSalary)} → ${moneyLabel(preview.nextBasicSalary)}.`
+            : preview.atLimit ? `${preview.reason} (${preview.rank}, Step ${preview.currentStep} of ${preview.maxStep}).` : preview.reason;
+          if (preview.eligible && state.user?.permissions?.includes('employmentCompensation.assign')) {
+            const apply = document.createElement('button');
+            apply.className = 'secondary-button';
+            apply.type = 'button';
+            apply.textContent = 'Apply reviewed increment';
+            output.after(apply);
+            apply.addEventListener('click', async () => {
+              apply.disabled = true;
+              try {
+                await api(`/employments/${id}/compensation/progression`, { method: 'POST' });
+                toast('Annual step increment applied.');
+                openDetails(id);
+              } catch (error) { toast(error.message, true); apply.disabled = false; }
+            }, { once: true });
+          }
+        } catch (error) { output.textContent = error.message; }
+        finally { progressionButton.disabled = false; }
+      });
     } catch (error) {
       $('#detail-content').innerHTML = `<div class="inline-error">${escapeHtml(error.message)}</div>`;
     }
